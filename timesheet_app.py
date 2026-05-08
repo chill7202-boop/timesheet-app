@@ -1,0 +1,1718 @@
+import streamlit as st
+import duckdb
+import pandas as pd
+import uuid
+from datetime import date, datetime
+
+st.set_page_config(page_title="Timesheet", page_icon="🕐", layout="wide")
+
+DB_PATH = "timesheet.duckdb"
+
+
+def init_db():
+    con = duckdb.connect(DB_PATH)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS entries (
+            id VARCHAR PRIMARY KEY,
+            entry_date DATE,
+            client VARCHAR,
+            project VARCHAR,
+            description VARCHAR,
+            hours DECIMAL(6,2),
+            rate DECIMAL(8,2)
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key VARCHAR PRIMARY KEY,
+            value VARCHAR
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS clients (
+            id VARCHAR PRIMARY KEY,
+            name VARCHAR,
+            address VARCHAR,
+            contact_name VARCHAR,
+            email VARCHAR
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS employees (
+            id VARCHAR PRIMARY KEY,
+            name VARCHAR,
+            email VARCHAR,
+            role VARCHAR,
+            rate DECIMAL(8,2)
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS invoices (
+            id            VARCHAR PRIMARY KEY,
+            invoice_number VARCHAR,
+            client        VARCHAR,
+            invoice_date  DATE,
+            subtotal      DECIMAL(10,2),
+            gst           DECIMAL(10,2),
+            total         DECIMAL(10,2),
+            billing_type  VARCHAR DEFAULT 'hourly',
+            invoice_type  VARCHAR DEFAULT 'timesheet',
+            paid          BOOLEAN DEFAULT FALSE,
+            paid_date     DATE
+        )
+    """)
+    # Migrations
+    for col in [
+        "ALTER TABLE entries ADD COLUMN employee VARCHAR DEFAULT 'Self'",
+        "ALTER TABLE entries ADD COLUMN status VARCHAR DEFAULT 'open'",
+        "ALTER TABLE clients ADD COLUMN billing_type VARCHAR DEFAULT 'hourly'",
+        "ALTER TABLE clients ADD COLUMN day_rate DECIMAL(8,2) DEFAULT 0",
+    ]:
+        try:
+            con.execute(col)
+        except Exception:
+            pass
+    # Migrate old submitted boolean → status
+    try:
+        con.execute("UPDATE entries SET status='submitted' WHERE submitted=true AND status='open'")
+    except Exception:
+        pass
+    con.close()
+
+
+def get_employees():
+    con = duckdb.connect(DB_PATH)
+    df = con.execute("SELECT * FROM employees ORDER BY name").df()
+    con.close()
+    return df
+
+
+def save_employee(emp_id, name, email, role, rate):
+    con = duckdb.connect(DB_PATH)
+    if emp_id:
+        con.execute(
+            "UPDATE employees SET name=?, email=?, role=?, rate=? WHERE id=?",
+            [name, email, role, rate, emp_id]
+        )
+    else:
+        con.execute(
+            "INSERT INTO employees VALUES (?, ?, ?, ?, ?)",
+            [str(uuid.uuid4()), name, email, role, rate]
+        )
+    con.close()
+
+
+def delete_employee(emp_id):
+    con = duckdb.connect(DB_PATH)
+    con.execute("DELETE FROM employees WHERE id = ?", [emp_id])
+    con.close()
+
+
+def get_clients_list():
+    con = duckdb.connect(DB_PATH)
+    df = con.execute("SELECT * FROM clients ORDER BY name").df()
+    con.close()
+    return df
+
+
+def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0):
+    con = duckdb.connect(DB_PATH)
+    if client_id:
+        con.execute(
+            "UPDATE clients SET name=?, address=?, contact_name=?, email=?, billing_type=?, day_rate=? WHERE id=?",
+            [name, address, contact_name, email, billing_type, day_rate, client_id]
+        )
+    else:
+        con.execute(
+            "INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate]
+        )
+    con.close()
+
+
+def delete_client(client_id):
+    con = duckdb.connect(DB_PATH)
+    con.execute("DELETE FROM clients WHERE id = ?", [client_id])
+    con.close()
+
+
+def get_setting(key, default=''):
+    con = duckdb.connect(DB_PATH)
+    row = con.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
+    con.close()
+    return row[0] if row else default
+
+
+def save_setting(key, value):
+    con = duckdb.connect(DB_PATH)
+    con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", [key, value])
+    con.close()
+
+
+def add_entry(entry_date, client, project, description, hours, rate, employee='Self'):
+    con = duckdb.connect(DB_PATH)
+    con.execute(
+        "INSERT INTO entries (id, entry_date, client, project, description, hours, rate, employee, status) VALUES (?,?,?,?,?,?,?,?,?)",
+        [str(uuid.uuid4()), entry_date, client, project, description, hours, rate, employee, 'open']
+    )
+    con.close()
+
+
+def load_entries(client=None, project=None, from_date=None, to_date=None, employee=None, status=None):
+    con = duckdb.connect(DB_PATH)
+    query = "SELECT * FROM entries WHERE 1=1"
+    params = []
+    if client:
+        query += " AND client = ?"
+        params.append(client)
+    if project:
+        query += " AND project = ?"
+        params.append(project)
+    if from_date:
+        query += " AND entry_date >= ?"
+        params.append(from_date)
+    if to_date:
+        query += " AND entry_date <= ?"
+        params.append(to_date)
+    if employee:
+        query += " AND employee = ?"
+        params.append(employee)
+    if status:
+        if isinstance(status, list):
+            placeholders = ','.join(['?' for _ in status])
+            query += f" AND status IN ({placeholders})"
+            params.extend(status)
+        else:
+            query += " AND status = ?"
+            params.append(status)
+    query += " ORDER BY entry_date DESC"
+    df = con.execute(query, params).df()
+    con.close()
+    return df
+
+
+def delete_entry(entry_id):
+    con = duckdb.connect(DB_PATH)
+    con.execute("DELETE FROM entries WHERE id = ?", [entry_id])
+    con.close()
+
+
+def set_status(entry_id, status):
+    con = duckdb.connect(DB_PATH)
+    con.execute("UPDATE entries SET status = ? WHERE id = ?", [status, entry_id])
+    con.close()
+
+
+def set_status_bulk(ids, status):
+    con = duckdb.connect(DB_PATH)
+    for i in ids:
+        con.execute("UPDATE entries SET status = ? WHERE id = ?", [status, i])
+    con.close()
+
+
+def get_next_invoice_number():
+    prefix = get_setting('inv_prefix', 'INV') or 'INV'
+    fmt    = get_setting('inv_format', 'date') or 'date'
+    if fmt == 'sequential':
+        num = int(get_setting('inv_next_num', '1') or 1)
+        return f"{prefix}-{num:03d}"
+    base = f"{prefix}-{datetime.now().strftime('%Y%m%d')}"
+    con = duckdb.connect(DB_PATH)
+    count = con.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE ?", [f"{base}%"]).fetchone()[0]
+    con.close()
+    return base if count == 0 else f"{base}-{count + 1}"
+
+
+def increment_invoice_number():
+    fmt = get_setting('inv_format', 'date') or 'date'
+    if fmt == 'sequential':
+        num = int(get_setting('inv_next_num', '1') or 1)
+        save_setting('inv_next_num', str(num + 1))
+
+
+def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet'):
+    con = duckdb.connect(DB_PATH)
+    con.execute(
+        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False]
+    )
+    con.close()
+
+
+def get_invoices(client=None):
+    con = duckdb.connect(DB_PATH)
+    q = "SELECT * FROM invoices WHERE 1=1"
+    p = []
+    if client:
+        q += " AND client = ?"
+        p.append(client)
+    q += " ORDER BY invoice_date DESC, invoice_number DESC"
+    df = con.execute(q, p).df()
+    con.close()
+    return df
+
+
+def mark_invoice_paid(invoice_id, paid=True):
+    con = duckdb.connect(DB_PATH)
+    if paid:
+        con.execute("UPDATE invoices SET paid=TRUE,  paid_date=? WHERE id=?", [date.today(), invoice_id])
+    else:
+        con.execute("UPDATE invoices SET paid=FALSE, paid_date=NULL WHERE id=?", [invoice_id])
+    con.close()
+
+
+def invoice_number_exists(inv_number):
+    con = duckdb.connect(DB_PATH)
+    row = con.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number = ?", [inv_number]).fetchone()
+    con.close()
+    return row[0] > 0
+
+
+def get_clients():
+    con = duckdb.connect(DB_PATH)
+    rows = con.execute("SELECT DISTINCT client FROM entries ORDER BY client").fetchall()
+    con.close()
+    return [r[0] for r in rows]
+
+
+def get_projects(client=None):
+    con = duckdb.connect(DB_PATH)
+    if client:
+        rows = con.execute(
+            "SELECT DISTINCT project FROM entries WHERE client = ? ORDER BY project", [client]
+        ).fetchall()
+    else:
+        rows = con.execute("SELECT DISTINCT project FROM entries ORDER BY project").fetchall()
+    con.close()
+    return [r[0] for r in rows]
+
+
+def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None):
+    my_name    = settings.get('name', '')
+    my_company = settings.get('company', '')
+    my_address = settings.get('address', '')
+    my_abn     = settings.get('abn', '')
+    my_email   = settings.get('email', '')
+
+    client_name    = settings.get('inv_client_name', '')
+    client_address = settings.get('inv_client_address', '')
+    inv_date       = date.today().strftime('%d %B %Y')
+    days_in_month  = [31,28,29,30,31,30,31,31,30,31,30,31][date.today().month - 1]
+    due_date       = date(date.today().year, date.today().month,
+                          min(date.today().day + 14, days_in_month)).strftime('%d %B %Y')
+
+    rows_html = ''
+    if billing_type == 'fixed':
+        for idx, line in enumerate(adhoc_lines or []):
+            amount = float(line.get('qty', 1)) * float(line.get('unit_price', 0))
+            rows_html += f"""
+        <tr>
+          <td style="white-space:nowrap">{idx + 1}</td>
+          <td>{line.get('description', '')}</td>
+          <td></td>
+          <td style="text-align:right">{float(line.get('qty', 1)):.2f}</td>
+          <td style="text-align:right">${float(line.get('unit_price', 0)):.2f}</td>
+          <td style="text-align:right;font-weight:400;color:#2D4A3E">${amount:.2f}</td>
+        </tr>"""
+        subtotal = sum(float(l.get('qty', 1)) * float(l.get('unit_price', 0)) for l in (adhoc_lines or []))
+    elif billing_type == 'day_rate':
+        grouped = entries_df.groupby('entry_date', sort=True)
+        for entry_date, grp in grouped:
+            projects = ', '.join(grp['project'].dropna().unique())
+            descs    = '; '.join(grp['description'].dropna().tolist())
+            amount   = float(client_day_rate)
+            rows_html += f"""
+        <tr>
+          <td style="white-space:nowrap">{pd.to_datetime(entry_date).strftime('%d/%m/%Y')}</td>
+          <td>{projects}</td>
+          <td>{descs}</td>
+          <td style="text-align:right">1</td>
+          <td style="text-align:right">${float(client_day_rate):.2f}</td>
+          <td style="text-align:right;font-weight:400;color:#2D4A3E">${amount:.2f}</td>
+        </tr>"""
+        subtotal = len(grouped) * float(client_day_rate)
+    else:
+        for _, row in entries_df.iterrows():
+            amount = float(row['hours']) * float(row['rate'])
+            rows_html += f"""
+        <tr>
+          <td style="white-space:nowrap">{pd.to_datetime(row['entry_date']).strftime('%d/%m/%Y')}</td>
+          <td>{row['project']}</td>
+          <td>{row['description']}</td>
+          <td style="text-align:right">{float(row['hours']):.2f}</td>
+          <td style="text-align:right">${float(row['rate']):.2f}</td>
+          <td style="text-align:right;font-weight:400;color:#2D4A3E">${amount:.2f}</td>
+        </tr>"""
+        subtotal = sum(float(r['hours']) * float(r['rate']) for _, r in entries_df.iterrows())
+    gst = subtotal * 0.1 if include_gst else 0
+    total = subtotal + gst
+
+    gst_row = f"""
+      <tr>
+        <td class="t-label">GST (10%)</td>
+        <td class="t-value">${gst:.2f}</td>
+      </tr>""" if include_gst else ''
+
+    abn_line         = f'ABN &nbsp;{my_abn}' if my_abn else ''
+    sender_display   = my_company or my_name
+    sender_sub       = my_name if my_company and my_name != my_company else ''
+    client_addr_html = f'<div style="margin-top:6px;color:#6B8F71;font-size:13px;line-height:1.7;white-space:pre-line">{client_address}</div>' if client_address else ''
+
+    contact_parts = [p for p in [my_address, abn_line, my_email] if p]
+    contact_html  = '<br>'.join(contact_parts)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Invoice {invoice_number}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+  :root {{
+    --forest:    #2D4A3E;
+    --navy:      #1C2B3A;
+    --sage:      #6B8F71;
+    --cream:     #F5F0E8;
+    --stone:     #C8BFA8;
+    --parchment: #EDE8DC;
+    --slate:     #4A5568;
+    --chalk:     #FAFAF7;
+  }}
+
+  body {{
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 300;
+    color: var(--slate);
+    background: var(--cream);
+    padding: 48px 24px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    line-height: 1.7;
+  }}
+
+  .page {{
+    max-width: 800px;
+    margin: 0 auto;
+    background: var(--chalk);
+    border: 0.5px solid var(--stone);
+  }}
+
+  /* ── Top bar ── */
+  .top-bar {{
+    height: 4px;
+    background: var(--forest);
+  }}
+
+  /* ── Header ── */
+  .header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 44px 52px 36px;
+    border-bottom: 0.5px solid var(--stone);
+  }}
+
+  .wordmark {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 26px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    color: var(--forest);
+    display: block;
+    margin-bottom: 12px;
+  }}
+
+  .sender-detail {{
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--slate);
+    line-height: 1.8;
+    opacity: 0.8;
+  }}
+
+  .invoice-badge {{ text-align: right; }}
+
+  .invoice-word {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--sage);
+    display: block;
+    margin-bottom: 8px;
+  }}
+
+  .invoice-number {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 42px;
+    font-weight: 300;
+    color: var(--navy);
+    letter-spacing: -0.5px;
+    line-height: 1;
+    display: block;
+    margin-bottom: 14px;
+  }}
+
+  .invoice-meta-grid {{
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--slate);
+    line-height: 1.9;
+  }}
+  .invoice-meta-grid span {{ color: var(--forest); font-weight: 400; }}
+
+  /* ── Bill-to ── */
+  .bill-strip {{
+    padding: 28px 52px;
+    border-bottom: 0.5px solid var(--stone);
+    background: var(--cream);
+  }}
+
+  .bill-eyebrow {{
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--sage);
+    display: block;
+    margin-bottom: 8px;
+  }}
+
+  .bill-name {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 22px;
+    font-weight: 400;
+    color: var(--navy);
+    line-height: 1.2;
+  }}
+
+  /* ── Table ── */
+  .table-wrap {{ padding: 0 52px; }}
+
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 32px 0 0;
+    font-size: 13px;
+    font-weight: 300;
+  }}
+
+  thead tr {{ background: var(--forest); }}
+
+  thead th {{
+    padding: 12px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--cream);
+    text-align: left;
+  }}
+  thead th:nth-child(4),
+  thead th:nth-child(5),
+  thead th:nth-child(6) {{ text-align: right; }}
+
+  tbody tr {{ border-bottom: 0.5px solid var(--parchment); }}
+  tbody tr:nth-child(even) {{ background: var(--cream); }}
+
+  tbody td {{
+    padding: 12px 14px;
+    color: var(--slate);
+    vertical-align: top;
+  }}
+
+  /* ── Totals ── */
+  .totals-wrap {{
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 52px 36px;
+  }}
+
+  .totals-table {{
+    width: 260px;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-weight: 300;
+  }}
+  .totals-table td {{ padding: 7px 12px; }}
+  .totals-table .t-label {{ text-align: right; color: var(--slate); opacity: 0.8; }}
+  .totals-table .t-value {{ text-align: right; color: var(--navy); }}
+  .totals-table .t-divider td {{ border-top: 0.5px solid var(--stone); padding-top: 12px; }}
+  .totals-table .t-total td {{
+    background: var(--forest);
+    color: var(--cream);
+    font-weight: 500;
+    font-size: 14px;
+    padding: 13px 12px;
+  }}
+  .totals-table .t-total td:first-child {{ text-align: right; }}
+  .totals-table .t-total td:last-child  {{ text-align: right; }}
+
+  /* ── Payment note ── */
+  .payment-note {{
+    margin: 0 52px 44px;
+    padding: 18px 22px;
+    border-left: 2px solid var(--sage);
+    background: var(--parchment);
+    font-size: 12.5px;
+    font-weight: 300;
+    color: var(--slate);
+    line-height: 1.75;
+  }}
+  .payment-note strong {{ color: var(--forest); font-weight: 500; }}
+
+  /* ── Footer ── */
+  .footer {{
+    border-top: 0.5px solid var(--stone);
+    padding: 20px 52px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--cream);
+  }}
+  .footer-mark {{
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    color: var(--forest);
+    opacity: 0.7;
+  }}
+  .footer-note {{
+    font-size: 11px;
+    font-weight: 300;
+    color: var(--stone);
+    letter-spacing: 0.04em;
+  }}
+
+  @media print {{
+    body {{ background: white; padding: 0; }}
+    .page {{ border: none; box-shadow: none; }}
+    .print-btn {{ display: none !important; }}
+  }}
+
+  .print-btn {{
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    z-index: 999;
+  }}
+  .print-btn button {{
+    background: var(--forest);
+    color: var(--cream);
+    border: none;
+    padding: 12px 22px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(45,74,62,0.25);
+  }}
+  .print-btn button:hover {{ background: var(--navy); }}
+</style>
+</head>
+<body>
+<div class="print-btn"><button onclick="window.print()">Print / Save as PDF</button></div>
+<div class="page">
+  <div class="top-bar"></div>
+
+  <div class="header">
+    <div>
+      <span class="wordmark">{sender_display}</span>
+      {"<div style='font-size:12px;color:var(--slate);margin-bottom:10px'>" + sender_sub + "</div>" if sender_sub else ""}
+      <div class="sender-detail">{contact_html}</div>
+    </div>
+    <div class="invoice-badge">
+      <span class="invoice-word">Invoice</span>
+      <span class="invoice-number">{invoice_number}</span>
+      <div class="invoice-meta-grid">
+        <div>Date &nbsp;&nbsp;<span>{inv_date}</span></div>
+        <div>Due &nbsp;&nbsp;&nbsp;<span>{due_date}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bill-strip">
+    <span class="bill-eyebrow">Bill To</span>
+    <div class="bill-name">{client_name}</div>
+    {client_addr_html}
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>{"#" if billing_type == 'fixed' else "Date"}</th>
+          <th>{"Description" if billing_type == 'fixed' else "Project"}</th>
+          <th>{"" if billing_type == 'fixed' else "Description"}</th>
+          <th>{"Qty" if billing_type == 'fixed' else ("Days" if billing_type == 'day_rate' else "Hours")}</th>
+          <th>{"Unit Price" if billing_type == 'fixed' else ("Day Rate" if billing_type == 'day_rate' else "Rate")}</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="totals-wrap">
+    <table class="totals-table">
+      <tr>
+        <td class="t-label">Subtotal</td>
+        <td class="t-value">${subtotal:.2f}</td>
+      </tr>
+      {gst_row}
+      <tr class="t-divider"><td colspan="2"></td></tr>
+      <tr class="t-total">
+        <td>Total (AUD)</td>
+        <td>${total:.2f}</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="payment-note">
+    <strong>Payment due by {due_date}.</strong><br>
+    {payment_terms.replace(chr(10), '<br>')}
+  </div>
+
+  <div class="footer">
+    <span class="footer-mark">{sender_display}</span>
+    <span class="footer-note">Thank you</span>
+  </div>
+</div>
+</body>
+</html>"""
+    return html
+
+
+# ── Init ─────────────────────────────────────────────────────────────────────
+
+init_db()
+
+st.markdown("""<style>
+.stAppDeployButton { display: none !important; }
+[data-testid="stAppDeployButton"] { display: none !important; }
+
+</style>""", unsafe_allow_html=True)
+
+if 'page' not in st.session_state:
+    st.session_state['page'] = 'home'
+
+def go(page):
+    st.session_state['page'] = page
+
+def back_button():
+    if st.button("← Back", key="back"):
+        st.session_state['page'] = 'home'
+        st.rerun()
+
+page = st.session_state['page']
+
+# ── Home ─────────────────────────────────────────────────────────────────────
+
+if page == 'home':
+    st.markdown("""<style>
+    .stButton > button,
+    [data-testid="stBaseButton-secondary"],
+    [data-testid="stBaseButton-primary"],
+    [data-testid="stButton"] > button {
+        height: 160px !important;
+        width: 160px !important;
+        min-width: 160px !important;
+        min-height: 160px !important;
+        font-size: 5rem !important;
+        padding: 0 !important;
+        border-radius: 20px !important;
+        line-height: 1 !important;
+    }
+    .stButton > button p,
+    .stButton > button span,
+    [data-testid="stBaseButton-secondary"] p,
+    [data-testid="stBaseButton-primary"] p,
+    [data-testid="stBaseButton-secondary"] span,
+    [data-testid="stBaseButton-primary"] span {
+        font-size: 5rem !important;
+        line-height: 1 !important;
+    }
+    .stButton, [data-testid="stButton"] {
+        display: flex !important;
+        justify-content: center !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    company = get_setting('company') or get_setting('name') or 'Timesheet'
+    st.title(company)
+    st.write("")
+
+    tiles = [
+        ("🕐", "Log Time",   'log',        True),
+        ("📋", "Timesheet",  'timesheet',  False),
+        ("🧾", "Invoice",    'invoice',    False),
+        ("👥", "Clients",    'clients',    False),
+        ("👤", "Employees",  'employees',  False),
+        ("📄", "Statements", 'statements', False),
+        ("⚙️", "Settings",  'settings',   False),
+    ]
+
+    cols = st.columns(len(tiles))
+    for col, (icon, label, dest, primary) in zip(cols, tiles):
+        with col:
+            if st.button(icon, key=f"nav_{dest}", help=label,
+                         type="primary" if primary else "secondary"):
+                go(dest); st.rerun()
+
+# ── Log Time ─────────────────────────────────────────────────────────────────
+
+if page == 'log':
+    back_button()
+    st.subheader("Log Time")
+
+    saved_clients = get_clients_list()
+
+    if saved_clients.empty:
+        st.info("Add your clients in the **Clients** page first, then come back to log time.")
+    else:
+        client_names = saved_clients['name'].tolist()
+
+        # Client search outside the form so it can react as you type
+        search = st.text_input("Search client", placeholder="Type to find a client...")
+        if search:
+            matches = [c for c in client_names if search.lower() in c.lower()]
+        else:
+            matches = client_names
+
+        if not matches:
+            st.warning("No clients match your search.")
+            selected_client = None
+        else:
+            selected_client = st.radio("Select client", matches, horizontal=True,
+                                       label_visibility="collapsed")
+
+        st.divider()
+
+        if selected_client:
+            st.markdown(f"**Client:** {selected_client}")
+            with st.form("log_form", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    entry_date   = st.date_input("Date", value=date.today())
+                    project      = st.text_input("Project / Matter")
+                    emp_df       = get_employees()
+                    emp_options  = ['Self'] + emp_df['name'].tolist() if not emp_df.empty else ['Self']
+                    employee     = st.selectbox("Employee", emp_options)
+                with col2:
+                    hours        = st.number_input("Hours", min_value=0.25, max_value=24.0, step=0.25, value=1.0)
+                    rate_default = float(get_setting('default_rate', '0') or 0)
+                    # Auto-fill rate from employee record if not Self
+                    if employee != 'Self' and not emp_df.empty:
+                        emp_row = emp_df[emp_df['name'] == employee]
+                        if not emp_row.empty and float(emp_row.iloc[0]['rate'] or 0) > 0:
+                            rate_default = float(emp_row.iloc[0]['rate'])
+                    rate = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=rate_default)
+
+                description = st.text_area("Description", placeholder="What did you work on?")
+                submitted   = st.form_submit_button("Save Entry", type="primary", use_container_width=True)
+
+            if submitted:
+                if not project or not description:
+                    st.error("Project and description are required.")
+                elif hours <= 0:
+                    st.error("Hours must be greater than 0.")
+                else:
+                    add_entry(entry_date, selected_client, project.strip(), description.strip(), hours, rate, employee)
+                    st.success(f"Saved {hours:.2f}h on {project} for {selected_client} — {employee}")
+
+# ── Timesheet ─────────────────────────────────────────────────────────────────
+
+if page == 'timesheet':
+    back_button()
+    st.subheader("Timesheet")
+
+    clients  = get_clients()
+    emp_df   = get_employees()
+    emp_list = ['All'] + emp_df['name'].tolist() if not emp_df.empty else ['All']
+
+    # ── Filters ──
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        filter_client = st.selectbox("Client", ['All'] + clients, key='ts_client')
+    with col2:
+        proj_list = get_projects(filter_client if filter_client != 'All' else None)
+        filter_project = st.selectbox("Project", ['All'] + proj_list, key='ts_project')
+    with col3:
+        filter_employee = st.selectbox("Employee", emp_list, key='ts_employee')
+    with col4:
+        from_date = st.date_input("From", value=None, key='ts_from')
+    with col5:
+        to_date = st.date_input("To", value=None, key='ts_to')
+
+    show_invoiced = st.checkbox("Show invoiced entries", value=False, key='ts_show_invoiced')
+
+    df = load_entries(
+        client    = filter_client   if filter_client   != 'All' else None,
+        project   = filter_project  if filter_project  != 'All' else None,
+        employee  = filter_employee if filter_employee != 'All' else None,
+        from_date = from_date,
+        to_date   = to_date,
+    )
+
+    if df.empty:
+        st.info("No entries found.")
+    else:
+        df['amount'] = df['hours'].astype(float) * df['rate'].astype(float)
+        if 'status' not in df.columns:
+            df['status'] = 'open'
+        df['status'] = df['status'].fillna('open')
+
+        open_df      = df[df['status'] == 'open'].copy()
+        submitted_df = df[df['status'] == 'submitted'].copy()
+        approved_df  = df[df['status'] == 'approved'].copy()
+        invoiced_df  = df[df['status'] == 'invoiced'].copy()
+
+        billable_hours = df[df['status'].isin(['open', 'submitted', 'approved'])]['hours'].astype(float).sum()
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Open",          len(open_df))
+        m2.metric("Submitted",     len(submitted_df))
+        m3.metric("Approved",      len(approved_df))
+        m4.metric("Invoiced",      len(invoiced_df))
+        m5.metric("Billable Hrs",  f"{billable_hours:.2f}")
+
+        st.divider()
+
+        # ── Open — editable ──
+        if not open_df.empty:
+            st.markdown("**Open** — edit entries, tick to submit")
+            open_df = open_df.reset_index(drop=True)
+            edit_cols = ['entry_date','employee','client','project','description','hours','rate']
+            open_display = open_df[edit_cols].rename(columns={
+                'entry_date':'Date','employee':'Employee','client':'Client',
+                'project':'Project','description':'Description','hours':'Hours','rate':'Rate ($)'
+            })
+            open_display.insert(0, 'Submit', False)
+            edited = st.data_editor(
+                open_display,
+                use_container_width=True, hide_index=True, num_rows="fixed",
+                column_config={
+                    'Submit':      st.column_config.CheckboxColumn('Submit', default=False),
+                    'Date':        st.column_config.DateColumn('Date'),
+                    'Hours':       st.column_config.NumberColumn('Hours', min_value=0.25, step=0.25, format="%.2f"),
+                    'Rate ($)':    st.column_config.NumberColumn('Rate ($)', min_value=0, step=5.0, format="%.2f"),
+                    'Employee':    st.column_config.TextColumn('Employee'),
+                    'Client':      st.column_config.TextColumn('Client'),
+                    'Project':     st.column_config.TextColumn('Project'),
+                    'Description': st.column_config.TextColumn('Description'),
+                },
+                key="open_editor"
+            )
+            selected_open = open_df.iloc[edited[edited['Submit'] == True].index]['id'].tolist()
+
+            bc1, bc2, bc3 = st.columns(3)
+            if bc1.button("Save Changes", key="save_open"):
+                con = duckdb.connect(DB_PATH)
+                ids = open_df['id'].tolist()
+                for i, row in edited.iterrows():
+                    if i < len(ids):
+                        con.execute("""
+                            UPDATE entries SET entry_date=?, employee=?, client=?, project=?,
+                            description=?, hours=?, rate=? WHERE id=?
+                        """, [row['Date'], row['Employee'], row['Client'], row['Project'],
+                              row['Description'], row['Hours'], row['Rate ($)'], ids[i]])
+                con.close()
+                st.success("Saved.")
+                st.rerun()
+            if bc2.button("Submit Selected", type="primary", key="submit_selected",
+                          disabled=len(selected_open) == 0):
+                set_status_bulk(selected_open, 'submitted')
+                st.success(f"Submitted {len(selected_open)} {'entry' if len(selected_open)==1 else 'entries'}.")
+                st.rerun()
+            if bc3.button("Submit All", key="submit_open"):
+                set_status_bulk(open_df['id'].tolist(), 'submitted')
+                st.success("All marked as submitted.")
+                st.rerun()
+
+        # ── Submitted — awaiting approval ──
+        if not submitted_df.empty:
+            st.divider()
+            st.markdown("**Submitted** — tick entries to approve or reject")
+            submitted_df = submitted_df.reset_index(drop=True)
+            sub_display = submitted_df[['entry_date','employee','client','project','description','hours','rate','amount']].copy()
+            sub_display.columns = ['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)']
+            sub_display.insert(0, 'Approve', False)
+            edited_sub = st.data_editor(
+                sub_display,
+                use_container_width=True, hide_index=True,
+                disabled=['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)'],
+                column_config={
+                    'Approve':    st.column_config.CheckboxColumn('Approve', default=False),
+                    'Amount ($)': st.column_config.NumberColumn(format='$%.2f'),
+                    'Rate ($)':   st.column_config.NumberColumn(format='$%.2f'),
+                },
+                key="submitted_editor"
+            )
+            selected_sub = submitted_df.iloc[edited_sub[edited_sub['Approve'] == True].index]['id'].tolist()
+
+            sc1, sc2, sc3 = st.columns(3)
+            if sc1.button("Approve Selected", type="primary", key="approve_selected",
+                          disabled=len(selected_sub) == 0):
+                set_status_bulk(selected_sub, 'approved')
+                st.success(f"Approved {len(selected_sub)} {'entry' if len(selected_sub)==1 else 'entries'}.")
+                st.rerun()
+            if sc2.button("Approve All", key="approve_all"):
+                set_status_bulk(submitted_df['id'].tolist(), 'approved')
+                st.success("All approved.")
+                st.rerun()
+            if sc3.button("Reject Selected", key="reject_selected",
+                          disabled=len(selected_sub) == 0):
+                set_status_bulk(selected_sub, 'open')
+                st.success(f"Returned {len(selected_sub)} {'entry' if len(selected_sub)==1 else 'entries'} to open.")
+                st.rerun()
+
+        # ── Approved — ready to invoice ──
+        if not approved_df.empty:
+            st.divider()
+            st.markdown("**Approved** — ready to invoice")
+            app_display = approved_df[['entry_date','employee','client','project','description','hours','rate','amount']].copy()
+            app_display.columns = ['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)']
+            st.dataframe(app_display, use_container_width=True, hide_index=True)
+
+        # ── Invoiced ──
+        if not invoiced_df.empty:
+            if show_invoiced:
+                st.divider()
+                st.markdown("**Invoiced**")
+                inv_display = invoiced_df[['entry_date','employee','client','project','description','hours','amount']].copy()
+                inv_display.columns = ['Date','Employee','Client','Project','Description','Hours','Amount ($)']
+                st.dataframe(inv_display, use_container_width=True, hide_index=True)
+            else:
+                st.caption(f"__{len(invoiced_df)} invoiced {'entry' if len(invoiced_df)==1 else 'entries'} hidden — tick 'Show invoiced entries' to view__")
+
+        st.divider()
+        export_df = df[['entry_date','employee','client','project','description','hours','rate','amount','status']].copy()
+        export_df.columns = ['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)','Status']
+        csv = export_df.to_csv(index=False)
+        st.download_button("Export to CSV", csv, "timesheet.csv", "text/csv")
+
+        with st.expander("Delete an entry"):
+            deletable = df[df['status'].isin(['open','submitted'])]
+            if deletable.empty:
+                st.info("Only open or submitted entries can be deleted.")
+            else:
+                delete_id = st.selectbox(
+                    "Select entry",
+                    deletable['id'].tolist(),
+                    format_func=lambda i: deletable[deletable['id'] == i].apply(
+                        lambda r: f"{r['entry_date']} | {r['client']} | {r['project']} | {r['hours']}h", axis=1
+                    ).values[0]
+                )
+                if st.button("Delete", type="primary"):
+                    delete_entry(delete_id)
+                    st.success("Deleted.")
+                    st.rerun()
+
+# ── Invoice ───────────────────────────────────────────────────────────────────
+
+if page == 'invoice':
+    back_button()
+    st.subheader("Generate Invoice")
+
+    client_records = get_clients_list()
+
+    if client_records.empty:
+        st.info("Add your clients in the **Clients** page first so their details can be looked up.")
+    else:
+        # ── Ready to invoice summary ──
+        all_approved = load_entries(status='approved')
+        if not all_approved.empty:
+            all_approved['amount'] = all_approved['hours'].astype(float) * all_approved['rate'].astype(float)
+            pending_clients = (
+                all_approved.groupby('client')
+                .agg(entries=('id', 'count'), hours=('hours', 'sum'), amount=('amount', 'sum'))
+                .reset_index()
+            )
+            st.caption(f"{len(pending_clients)} client{'s' if len(pending_clients) != 1 else ''} with approved entries ready to invoice")
+            pcols = st.columns(min(len(pending_clients), 4))
+            for col, (_, row) in zip(pcols, pending_clients.iterrows()):
+                with col:
+                    if st.button(
+                        f"**{row['client']}**\n{int(row['entries'])} entries · ${row['amount']:,.2f}",
+                        use_container_width=True, key=f"pend_{row['client']}"
+                    ):
+                        st.session_state['inv_search'] = row['client']
+                        st.rerun()
+            st.divider()
+
+        client_names = client_records['name'].tolist()
+
+        # Pre-select client if arriving from Timesheet page
+        _preset = st.session_state.pop('inv_preset_client', None)
+        if _preset:
+            st.session_state['inv_search'] = _preset
+
+        # Client search
+        inv_search = st.text_input("Search client", placeholder="Type to find a client...", key='inv_search')
+        if inv_search:
+            matches = [c for c in client_names if inv_search.lower() in c.lower()]
+        else:
+            matches = client_names
+
+        if not matches:
+            st.warning("No clients match your search.")
+            inv_client = None
+        else:
+            inv_client = st.radio("Select client", matches, horizontal=True,
+                                  label_visibility="collapsed", key='inv_client_radio')
+
+        st.divider()
+
+        if inv_client:
+            matched = client_records[client_records['name'] == inv_client]
+            prefill_address     = matched.iloc[0]['address'] if not matched.empty else ''
+            _bt                 = matched.iloc[0]['billing_type'] if not matched.empty else 'hourly'
+            client_billing_type = _bt if _bt in ('hourly', 'day_rate') else 'hourly'
+            client_day_rate     = float(matched.iloc[0]['day_rate'] or 0) if not matched.empty else 0.0
+
+            billing_label = 'Hourly' if client_billing_type != 'day_rate' else f'Day Rate (${client_day_rate:.2f}/day)'
+            st.markdown(f"**Client:** {inv_client} &nbsp;·&nbsp; Default billing: **{billing_label}**")
+
+            inv_mode = st.radio(
+                "Invoice type",
+                ['timesheet', 'fixed'],
+                format_func=lambda x: 'Timesheet entries (approved only)' if x == 'timesheet' else 'Fixed price / ad hoc',
+                horizontal=True,
+                key='inv_mode',
+            )
+
+            st.divider()
+
+            col1, col2 = st.columns(2)
+            with col2:
+                client_address = st.text_area("Client address", value=prefill_address, height=80)
+                include_gst    = st.checkbox("Include GST (10%)", value=True)
+
+            if inv_mode == 'timesheet':
+                with col1:
+                    inv_project = st.selectbox(
+                        "Filter by project",
+                        ['All'] + get_projects(inv_client),
+                        key='inv_project'
+                    )
+                    inv_number = get_next_invoice_number()
+                    st.markdown(f"**Invoice number:** {inv_number}")
+
+                use_date_range = st.checkbox("Filter by date range", value=False)
+                if use_date_range:
+                    dc1, dc2 = st.columns(2)
+                    inv_from = dc1.date_input("From date", key='inv_from')
+                    inv_to   = dc2.date_input("To date", value=date.today(), key='inv_to')
+                else:
+                    inv_from = inv_to = None
+
+                # ── Show approved entries ──
+                available_df = load_entries(
+                    client    = inv_client,
+                    project   = inv_project if inv_project != 'All' else None,
+                    from_date = inv_from,
+                    to_date   = inv_to,
+                    status    = 'approved',
+                )
+
+                if available_df.empty:
+                    st.warning("No approved entries match the current filters. Approve entries on the Timesheet page first.")
+                else:
+                    available_df['amount'] = available_df['hours'].astype(float) * available_df['rate'].astype(float)
+
+                    if client_billing_type == 'day_rate':
+                        num_days    = len(available_df['entry_date'].unique())
+                        avail_total = num_days * client_day_rate
+                        st.success(f"{len(available_df)} approved entries across **{num_days} day{'s' if num_days != 1 else ''}** · **${avail_total:,.2f}** to invoice (day rate)")
+                        show_cols = ['entry_date', 'employee', 'project', 'description', 'hours']
+                        col_names = ['Date', 'Employee', 'Project', 'Description', 'Hours']
+                    else:
+                        avail_hours = available_df['hours'].astype(float).sum()
+                        avail_total = available_df['amount'].sum()
+                        st.success(f"{len(available_df)} approved entries · **{avail_hours:.2f} hrs** · **${avail_total:,.2f}** to invoice")
+                        show_cols = ['entry_date', 'employee', 'project', 'description', 'hours', 'rate', 'amount']
+                        col_names = ['Date', 'Employee', 'Project', 'Description', 'Hours', 'Rate ($)', 'Amount ($)']
+
+                    disp = available_df[show_cols].copy()
+                    disp.columns = col_names
+                    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+                if not available_df.empty:
+                    already_used_ts = invoice_number_exists(inv_number)
+                    if already_used_ts:
+                        st.warning(f"Invoice {inv_number} has already been recorded. Tick below to override.")
+                        ts_override = st.checkbox("Override — regenerate this invoice", key="ts_override")
+                    else:
+                        ts_override = True
+
+                    if ts_override and st.button("Generate Invoice", type="primary", key="gen_ts"):
+                        inv_df = available_df
+                        reserved_num = get_next_invoice_number()
+                        increment_invoice_number()
+                        settings_dict = {
+                            'name': get_setting('name'), 'company': get_setting('company'),
+                            'address': get_setting('address'), 'abn': get_setting('abn'),
+                            'email': get_setting('email'),
+                            'inv_client_name': inv_client, 'inv_client_address': client_address,
+                        }
+                        html = generate_invoice_html(
+                            inv_df, settings_dict, reserved_num, include_gst,
+                            payment_terms=get_setting('payment_terms', ''),
+                            billing_type=client_billing_type, client_day_rate=client_day_rate,
+                        )
+                        if client_billing_type == 'day_rate':
+                            subtotal = len(inv_df['entry_date'].unique()) * client_day_rate
+                        else:
+                            subtotal = sum(float(r['hours']) * float(r['rate']) for _, r in inv_df.iterrows())
+                        gst   = subtotal * 0.1 if include_gst else 0
+                        total = subtotal + gst
+                        st.session_state['generated_invoice'] = {
+                            'html': html, 'ids': inv_df['id'].tolist(),
+                            'client': inv_client, 'subtotal': subtotal, 'gst': gst, 'total': total,
+                            'entries': len(inv_df), 'inv_number': reserved_num,
+                            'is_timesheet': True, 'billing_type': client_billing_type,
+                        }
+
+            else:  # fixed price
+                with col1:
+                    inv_number = st.text_input("Invoice number", value=get_next_invoice_number(), key='inv_num_fp')
+
+                if 'adhoc_lines' not in st.session_state:
+                    st.session_state['adhoc_lines'] = []
+
+                # ── Saved lines list ──
+                if st.session_state['adhoc_lines']:
+                    lines_df = pd.DataFrame([
+                        {
+                            'Description':  l['description'],
+                            'Qty':          float(l['qty']),
+                            'Unit Price ($)': float(l['unit_price']),
+                            'Amount ($)':   float(l['qty']) * float(l['unit_price']),
+                        }
+                        for l in st.session_state['adhoc_lines']
+                    ])
+                    st.dataframe(lines_df, use_container_width=True, hide_index=True,
+                                 column_config={
+                                     'Qty':            st.column_config.NumberColumn(format='%.2f'),
+                                     'Unit Price ($)': st.column_config.NumberColumn(format='$%.2f'),
+                                     'Amount ($)':     st.column_config.NumberColumn(format='$%.2f'),
+                                 })
+
+                    fp_subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in st.session_state['adhoc_lines'])
+                    fp_gst      = fp_subtotal * 0.1 if include_gst else 0
+                    st.caption(f"Subtotal: ${fp_subtotal:,.2f}  ·  GST: ${fp_gst:,.2f}  ·  **Total: ${fp_subtotal + fp_gst:,.2f}**")
+
+                    with st.expander("Remove a line"):
+                        rm_idx = st.selectbox(
+                            "Select line to remove",
+                            range(len(st.session_state['adhoc_lines'])),
+                            format_func=lambda i: f"{i+1}. {st.session_state['adhoc_lines'][i]['description']}",
+                        )
+                        if st.button("Remove line", key="rm_line"):
+                            st.session_state['adhoc_lines'].pop(rm_idx)
+                            st.session_state.pop('generated_invoice', None)
+                            st.rerun()
+
+                    st.divider()
+
+                # ── Add line form ──
+                with st.form("add_line_form", clear_on_submit=True):
+                    st.markdown("**Add a line item**")
+                    new_desc = st.text_input("Description", placeholder="e.g. Website design, Project management…")
+                    ac1, ac2 = st.columns(2)
+                    new_qty   = ac1.number_input("Quantity", min_value=0.0, step=1.0, value=1.0)
+                    new_price = ac2.number_input("Unit price ($)", min_value=0.0, step=100.0, value=0.0)
+                    add_btn   = st.form_submit_button("+ Add Line", use_container_width=True)
+
+                if add_btn:
+                    if not new_desc.strip():
+                        st.error("Description is required.")
+                    else:
+                        st.session_state['adhoc_lines'].append({
+                            'description': new_desc.strip(),
+                            'qty':         new_qty,
+                            'unit_price':  new_price,
+                        })
+                        st.session_state.pop('generated_invoice', None)
+                        st.rerun()
+
+                fp_lines = st.session_state['adhoc_lines']
+                if fp_lines:
+                    already_used_fp = invoice_number_exists(inv_number)
+                    if already_used_fp:
+                        st.warning(f"Invoice {inv_number} has already been recorded. Tick below to override.")
+                        fp_override = st.checkbox("Override — regenerate this invoice", key="fp_override")
+                    else:
+                        fp_override = True
+                    gcol, clrcol = st.columns(2)
+                    if fp_override and gcol.button("Generate Invoice", type="primary", key="gen_fp", use_container_width=True):
+                        fp_reserved_num = inv_number.strip() or get_next_invoice_number()
+                        settings_dict = {
+                            'name': get_setting('name'), 'company': get_setting('company'),
+                            'address': get_setting('address'), 'abn': get_setting('abn'),
+                            'email': get_setting('email'),
+                            'inv_client_name': inv_client, 'inv_client_address': client_address,
+                        }
+                        html = generate_invoice_html(
+                            None, settings_dict, fp_reserved_num, include_gst,
+                            payment_terms=get_setting('payment_terms', ''),
+                            billing_type='fixed', adhoc_lines=fp_lines,
+                        )
+                        subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in fp_lines)
+                        gst      = subtotal * 0.1 if include_gst else 0
+                        total    = subtotal + gst
+                        st.session_state['generated_invoice'] = {
+                            'html': html, 'ids': [],
+                            'client': inv_client, 'subtotal': subtotal, 'gst': gst, 'total': total,
+                            'entries': len(fp_lines), 'inv_number': fp_reserved_num,
+                            'is_timesheet': False, 'billing_type': 'fixed',
+                        }
+                    if clrcol.button("Clear all lines", key="clear_fp", use_container_width=True):
+                        st.session_state['adhoc_lines'] = []
+                        st.session_state.pop('generated_invoice', None)
+                        st.rerun()
+
+            # ── Download / mark invoiced ──
+            inv_data = st.session_state.get('generated_invoice')
+            if inv_data and inv_data.get('client') == inv_client:
+                st.success(f"Invoice {inv_data['inv_number']} — {inv_data['entries']} line{'s' if inv_data['entries'] != 1 else ''} — Total: ${inv_data['total']:,.2f}")
+                st.caption("Open the downloaded file in your browser — a Print / Save as PDF button appears in the corner.")
+
+                dl_col, mark_col = st.columns(2)
+                with dl_col:
+                    st.download_button(
+                        "⬇ Download Invoice",
+                        inv_data['html'],
+                        f"{inv_data['inv_number']}.html",
+                        "text/html",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                with mark_col:
+                    if inv_data.get('is_timesheet') and inv_data['ids']:
+                        if st.button("✓ Mark entries as Invoiced", use_container_width=True, key="mark_invoiced"):
+                            set_status_bulk(inv_data['ids'], 'invoiced')
+                            save_invoice(inv_data['inv_number'], inv_data['client'],
+                                         inv_data.get('subtotal', inv_data['total']),
+                                         inv_data.get('gst', 0), inv_data['total'],
+                                         inv_data.get('billing_type', 'hourly'), 'timesheet')
+                            st.session_state.pop('generated_invoice', None)
+                            go('statements')
+                            st.rerun()
+                    else:
+                        if st.button("✓ Record Invoice Sent", use_container_width=True, key="mark_fp_done"):
+                            save_invoice(inv_data['inv_number'], inv_data['client'],
+                                         inv_data.get('subtotal', inv_data['total']),
+                                         inv_data.get('gst', 0), inv_data['total'],
+                                         'fixed', 'fixed')
+                            increment_invoice_number()
+                            st.session_state.pop('generated_invoice', None)
+                            st.session_state.pop('adhoc_lines', None)
+                            go('statements')
+                            st.rerun()
+
+                with st.expander("Preview"):
+                    st.components.v1.html(inv_data['html'], height=700, scrolling=True)
+
+# ── Clients ───────────────────────────────────────────────────────────────────
+
+if page == 'clients':
+    back_button()
+    st.subheader("Clients")
+
+    client_records = get_clients_list()
+
+    col_list, col_form = st.columns([1, 1])
+
+    with col_form:
+        st.markdown("**Add / Edit client**")
+        editing = st.session_state.get('editing_client')
+
+        if editing:
+            row = client_records[client_records['id'] == editing].iloc[0]
+            form_name         = row['name']
+            form_address      = row['address'] or ''
+            form_contact_name = row['contact_name'] or ''
+            form_email        = row['email'] or ''
+            _bt               = row.get('billing_type', 'hourly')
+            form_billing_type = _bt if _bt in ('hourly', 'day_rate') else 'hourly'
+            form_day_rate     = float(row.get('day_rate', 0) or 0)
+        else:
+            form_name = form_address = form_contact_name = form_email = ''
+            form_billing_type = 'hourly'
+            form_day_rate     = 0.0
+
+        with st.form("client_form", clear_on_submit=True):
+            c_name    = st.text_input("Company name", value=form_name)
+            c_address = st.text_area("Address", value=form_address, height=80)
+            c_contact = st.text_input("Contact name", value=form_contact_name)
+            c_email   = st.text_input("Email", value=form_email)
+            c_billing = st.radio(
+                "Billing type", ['hourly', 'day_rate'],
+                format_func=lambda x: 'Hourly' if x == 'hourly' else 'Day Rate',
+                index=0 if form_billing_type != 'day_rate' else 1,
+                horizontal=True,
+            )
+            c_day_rate = st.number_input(
+                "Day rate ($)", min_value=0.0, step=50.0, value=form_day_rate,
+                help="Used when billing type is Day Rate"
+            )
+            save_btn  = st.form_submit_button("Save Client", type="primary", use_container_width=True)
+
+        if save_btn:
+            if not c_name:
+                st.error("Company name is required.")
+            else:
+                save_client(editing, c_name.strip(), c_address.strip(), c_contact.strip(), c_email.strip(),
+                            c_billing, c_day_rate)
+                st.session_state.pop('editing_client', None)
+                st.success(f"{'Updated' if editing else 'Saved'}: {c_name}")
+                st.rerun()
+
+        if editing and st.button("Cancel edit"):
+            st.session_state.pop('editing_client', None)
+            st.rerun()
+
+    with col_list:
+        st.markdown("**Saved clients**")
+        if client_records.empty:
+            st.info("No clients saved yet.")
+        else:
+            for _, row in client_records.iterrows():
+                c1, c2, c3 = st.columns([3, 1, 1])
+                c1.write(f"**{row['name']}**")
+                if row['contact_name']:
+                    c1.caption(row['contact_name'])
+                if c2.button("Edit", key=f"edit_{row['id']}"):
+                    st.session_state['editing_client'] = row['id']
+                    st.rerun()
+                if c3.button("Delete", key=f"del_{row['id']}"):
+                    delete_client(row['id'])
+                    st.rerun()
+
+# ── Employees ─────────────────────────────────────────────────────────────────
+
+if page == 'employees':
+    back_button()
+    st.subheader("Employees")
+
+    emp_tab1, emp_tab2 = st.tabs(["Manage Employees", "Import Timesheet"])
+
+    with emp_tab1:
+        emp_df = get_employees()
+        col_list, col_form = st.columns([1, 1])
+
+        with col_form:
+            st.markdown("**Add / Edit employee**")
+            editing = st.session_state.get('editing_employee')
+
+            if editing and not emp_df.empty:
+                row = emp_df[emp_df['id'] == editing]
+                if not row.empty:
+                    row = row.iloc[0]
+                    f_name, f_email = row['name'], row['email'] or ''
+                    f_role, f_rate  = row['role'] or '', float(row['rate'] or 0)
+                else:
+                    editing = None
+                    f_name = f_email = f_role = ''
+                    f_rate = 0.0
+            else:
+                f_name = f_email = f_role = ''
+                f_rate = 0.0
+
+            with st.form("emp_form", clear_on_submit=True):
+                e_name  = st.text_input("Full name",  value=f_name)
+                e_email = st.text_input("Email",      value=f_email)
+                e_role  = st.text_input("Role / title", value=f_role)
+                e_rate  = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=f_rate)
+                save_btn = st.form_submit_button("Save Employee", type="primary", use_container_width=True)
+
+            if save_btn:
+                if not e_name:
+                    st.error("Name is required.")
+                else:
+                    save_employee(editing, e_name.strip(), e_email.strip(), e_role.strip(), e_rate)
+                    st.session_state.pop('editing_employee', None)
+                    st.success(f"{'Updated' if editing else 'Saved'}: {e_name}")
+                    st.rerun()
+
+            if editing and st.button("Cancel edit", key="cancel_emp"):
+                st.session_state.pop('editing_employee', None)
+                st.rerun()
+
+        with col_list:
+            st.markdown("**Saved employees**")
+            if emp_df.empty:
+                st.info("No employees added yet.")
+            else:
+                for _, row in emp_df.iterrows():
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    c1.write(f"**{row['name']}**")
+                    if row['role']:
+                        c1.caption(f"{row['role']} — ${float(row['rate'] or 0):.0f}/hr")
+                    if c2.button("Edit", key=f"eedit_{row['id']}"):
+                        st.session_state['editing_employee'] = row['id']
+                        st.rerun()
+                    if c3.button("Delete", key=f"edel_{row['id']}"):
+                        delete_employee(row['id'])
+                        st.rerun()
+
+    with emp_tab2:
+        st.markdown("**Import a timesheet CSV**")
+        st.caption("CSV must have columns: date, project, description, hours (and optionally rate)")
+
+        template_csv = "date,project,description,hours,rate\n2026-05-08,Project Name,Description of work,1.5,150.00\n"
+        st.download_button("Download CSV Template", template_csv, "timesheet_template.csv", "text/csv")
+
+        emp_df = get_employees()
+        if emp_df.empty:
+            st.info("Add employees first before importing.")
+        else:
+            client_records = get_clients_list()
+            col1, col2 = st.columns(2)
+            with col1:
+                imp_employee = st.selectbox("Employee", emp_df['name'].tolist(), key='imp_emp')
+            with col2:
+                if not client_records.empty:
+                    imp_client = st.selectbox("Client", client_records['name'].tolist(), key='imp_client')
+                else:
+                    imp_client = st.text_input("Client name", key='imp_client_txt')
+
+            uploaded = st.file_uploader("Upload CSV", type="csv")
+
+            if uploaded:
+                try:
+                    imp_df = pd.read_csv(uploaded)
+                    imp_df.columns = [c.strip().lower() for c in imp_df.columns]
+
+                    required = {'date', 'project', 'description', 'hours'}
+                    if not required.issubset(set(imp_df.columns)):
+                        st.error(f"CSV must contain columns: {', '.join(required)}")
+                    else:
+                        emp_row     = emp_df[emp_df['name'] == imp_employee].iloc[0]
+                        default_rate = float(emp_row['rate'] or 0)
+
+                        imp_df['date']        = pd.to_datetime(imp_df['date']).dt.date
+                        imp_df['hours']       = pd.to_numeric(imp_df['hours'], errors='coerce').fillna(0)
+                        imp_df['rate']        = pd.to_numeric(imp_df.get('rate', default_rate), errors='coerce').fillna(default_rate)
+                        imp_df['description'] = imp_df['description'].astype(str)
+                        imp_df['project']     = imp_df['project'].astype(str)
+
+                        st.write(f"**Preview — {len(imp_df)} rows**")
+                        st.dataframe(imp_df[['date','project','description','hours','rate']], use_container_width=True, hide_index=True)
+
+                        if st.button("Import", type="primary"):
+                            for _, row in imp_df.iterrows():
+                                add_entry(row['date'], imp_client, row['project'],
+                                          row['description'], float(row['hours']),
+                                          float(row['rate']), imp_employee)
+                            st.success(f"Imported {len(imp_df)} entries for {imp_employee}")
+                except Exception as e:
+                    st.error(f"Could not read CSV: {e}")
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+if page == 'settings':
+    back_button()
+    st.subheader("Settings")
+    st.caption("These appear on every invoice you generate.")
+
+    with st.form("settings_form"):
+        name         = st.text_input("Your name",     value=get_setting('name'))
+        company      = st.text_input("Company name",  value=get_setting('company'))
+        address      = st.text_area("Address",        value=get_setting('address'), height=80)
+        abn          = st.text_input("ABN",           value=get_setting('abn'))
+        email        = st.text_input("Email",         value=get_setting('email'))
+        default_rate = st.number_input(
+            "Default hourly rate ($)",
+            min_value=0.0, step=5.0,
+            value=float(get_setting('default_rate', '0') or 0)
+        )
+        payment_terms = st.text_area(
+            "Payment terms",
+            value=get_setting('payment_terms', 'Payment due within 14 days of invoice date.\nPlease reference the invoice number with your payment.'),
+            height=100
+        )
+
+        st.divider()
+        st.markdown("**Invoice numbering**")
+        _fmt = get_setting('inv_format', 'date') or 'date'
+        inv_format = st.radio(
+            "Format",
+            ['date', 'sequential'],
+            format_func=lambda x: 'Date-based  (e.g. INV-20260508)' if x == 'date' else 'Sequential  (e.g. INV-001)',
+            index=0 if _fmt != 'sequential' else 1,
+            horizontal=True,
+        )
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            inv_prefix = fc1.text_input(
+                "Prefix", value=get_setting('inv_prefix', 'INV') or 'INV',
+                help="Letters before the number, e.g. INV or KH"
+            )
+        with fc2:
+            inv_next_num = fc2.number_input(
+                "Next sequential number", min_value=1, step=1,
+                value=int(get_setting('inv_next_num', '1') or 1),
+                help="Only used when format is Sequential"
+            )
+
+        saved = st.form_submit_button("Save Settings", type="primary")
+
+    if saved:
+        for key, val in [
+            ('name', name), ('company', company), ('address', address),
+            ('abn', abn), ('email', email), ('default_rate', str(default_rate)),
+            ('payment_terms', payment_terms),
+            ('inv_format', inv_format), ('inv_prefix', inv_prefix),
+            ('inv_next_num', str(int(inv_next_num))),
+        ]:
+            save_setting(key, val)
+        st.success("Settings saved.")
+
+    st.divider()
+    st.caption(f"Next invoice number will be: **{get_next_invoice_number()}**")
+
+# ── Statements ────────────────────────────────────────────────────────────────
+
+if page == 'statements':
+    back_button()
+    st.subheader("Statements")
+
+    inv_df = get_invoices()
+
+    if inv_df.empty:
+        st.info("No invoices recorded yet. Invoices appear here once you click 'Mark as Invoiced' on the Invoice page.")
+    else:
+        inv_df['subtotal']  = inv_df['subtotal'].astype(float)
+        inv_df['gst']       = inv_df['gst'].astype(float)
+        inv_df['total']     = inv_df['total'].astype(float)
+        inv_df['paid']      = inv_df['paid'].astype(bool)
+
+        total_billed      = inv_df['total'].sum()
+        total_paid        = inv_df[inv_df['paid']]['total'].sum()
+        total_outstanding = total_billed - total_paid
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Invoices Raised",  len(inv_df))
+        m2.metric("Total Billed",     f"${total_billed:,.2f}")
+        m3.metric("Received",         f"${total_paid:,.2f}")
+        m4.metric("Outstanding",      f"${total_outstanding:,.2f}")
+
+        st.divider()
+
+        # Filters
+        fa, fb, fc, fd = st.columns([2, 1.5, 1.5, 2])
+        all_clients = ['All'] + sorted(inv_df['client'].dropna().unique().tolist())
+        filter_client = fa.selectbox("Client", all_clients, key='stmt_client')
+
+        inv_df['invoice_date'] = pd.to_datetime(inv_df['invoice_date'])
+        months = sorted(inv_df['invoice_date'].dt.to_period('M').astype(str).unique(), reverse=True)
+        filter_month = fb.selectbox("Month", ['All'] + months, key='stmt_month')
+
+        filter_from = fc.date_input("From date", value=None, key='stmt_from')
+        filter_to   = fd.date_input("To date",   value=None, key='stmt_to')
+
+        inv_search = st.text_input("Search invoice number", placeholder="e.g. INV-002", key='stmt_search')
+
+        view_df = inv_df.copy()
+        if filter_client != 'All':
+            view_df = view_df[view_df['client'] == filter_client]
+        if filter_month != 'All':
+            view_df = view_df[view_df['invoice_date'].dt.to_period('M').astype(str) == filter_month]
+        if filter_from:
+            view_df = view_df[view_df['invoice_date'] >= pd.Timestamp(filter_from)]
+        if filter_to:
+            view_df = view_df[view_df['invoice_date'] <= pd.Timestamp(filter_to)]
+        if inv_search.strip():
+            view_df = view_df[view_df['invoice_number'].str.contains(inv_search.strip(), case=False, na=False)]
+
+        st.write("")
+
+        # ── Outstanding ────────────────────────────────────────────────────────
+        outstanding = view_df[~view_df['paid']].sort_values('invoice_date', ascending=False)
+        if outstanding.empty:
+            st.success("All invoices are paid.")
+        else:
+            outstanding_total = outstanding['total'].sum()
+            st.markdown(
+                f"**Outstanding** &nbsp;"
+                f"<span style='font-size:0.85rem;color:#888'>"
+                f"{len(outstanding)} invoice{'s' if len(outstanding)!=1 else ''} · "
+                f"${outstanding_total:,.2f}</span>",
+                unsafe_allow_html=True,
+            )
+
+            # Column headers
+            h1, h2, h3, h4, h5, h6 = st.columns([1.8, 2.2, 1.4, 1.2, 1.6, 1.8])
+            h1.caption("Invoice #")
+            h2.caption("Client")
+            h3.caption("Date")
+            h4.caption("Age")
+            h5.caption("Amount")
+            h6.caption("")
+
+            for _, row in outstanding.iterrows():
+                inv_date = pd.to_datetime(row['invoice_date'])
+                days = (date.today() - inv_date.date()).days
+                if days > 60:
+                    age_str = f"🔴 {days}d"
+                elif days > 30:
+                    age_str = f"🟡 {days}d"
+                else:
+                    age_str = f"{days}d"
+
+                c1, c2, c3, c4, c5, c6 = st.columns([1.8, 2.2, 1.4, 1.2, 1.6, 1.8])
+                c1.write(f"**{row['invoice_number']}**")
+                c2.write(row['client'])
+                c3.write(inv_date.strftime('%d/%m/%Y'))
+                c4.write(age_str)
+                c5.write(f"**${float(row['total']):,.2f}**")
+                if c6.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
+                    mark_invoice_paid(row['id'], paid=True)
+                    st.rerun()
+
+            st.write("")
+
+        # ── Paid ───────────────────────────────────────────────────────────────
+        paid = view_df[view_df['paid']].sort_values('paid_date', ascending=False)
+        if not paid.empty:
+            paid_total = paid['total'].sum()
+            with st.expander(
+                f"✅ Paid — {len(paid)} invoice{'s' if len(paid)!=1 else ''} · ${paid_total:,.2f}"
+            ):
+                h1, h2, h3, h4, h5, h6 = st.columns([1.8, 2.2, 1.4, 1.4, 1.6, 1.6])
+                h1.caption("Invoice #")
+                h2.caption("Client")
+                h3.caption("Invoiced")
+                h4.caption("Paid on")
+                h5.caption("Amount")
+                h6.caption("")
+
+                for _, row in paid.iterrows():
+                    c1, c2, c3, c4, c5, c6 = st.columns([1.8, 2.2, 1.4, 1.4, 1.6, 1.6])
+                    c1.write(f"**{row['invoice_number']}**")
+                    c2.write(row['client'])
+                    c3.write(pd.to_datetime(row['invoice_date']).strftime('%d/%m/%Y'))
+                    paid_on = pd.to_datetime(row['paid_date']).strftime('%d/%m/%Y') if pd.notna(row['paid_date']) else '—'
+                    c4.write(paid_on)
+                    c5.write(f"${float(row['total']):,.2f}")
+                    if c6.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
+                        mark_invoice_paid(row['id'], paid=False)
+                        st.rerun()
+
+        # ── Export ─────────────────────────────────────────────────────────────
+        st.divider()
+        export = view_df[['invoice_number','client','invoice_date','invoice_type','subtotal','gst','total','paid','paid_date']].copy()
+        export.columns = ['Invoice #','Client','Date','Type','Subtotal','GST','Total','Paid','Paid Date']
+        st.download_button("⬇ Export to CSV", export.to_csv(index=False), "statements.csv", "text/csv")
