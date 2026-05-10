@@ -871,15 +871,10 @@ if 'authenticated' not in st.session_state:
 
 if not st.session_state.authenticated:
     st.title("Kingsleyhill Timesheet")
-    try:
-        _app_pwd_len = len(str(st.secrets["APP_PASSWORD"]).strip())
-        st.caption(f"DEBUG: APP_PASSWORD found, length={_app_pwd_len}")
-    except Exception as _e:
-        st.caption(f"DEBUG: APP_PASSWORD error — {_e}")
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
         try:
-            correct = get_setting('app_password', '').strip() or str(st.secrets["APP_PASSWORD"]).strip()
+            correct = str(st.secrets["APP_PASSWORD"]).strip()
         except Exception:
             correct = ""
         if pwd.strip() == correct:
@@ -1938,32 +1933,6 @@ if page == 'employees':
 if page == 'settings':
     back_button()
     st.subheader("Settings")
-
-    if 'settings_unlocked' not in st.session_state:
-        st.session_state.settings_unlocked = False
-
-    if not st.session_state.settings_unlocked:
-        st.info("Settings are password protected.")
-        spwd = st.text_input("Password", type="password", key="settings_pwd")
-        if st.button("Unlock", type="primary"):
-            try:
-                correct = get_setting('settings_password', '').strip()
-                if not correct:
-                    try:
-                        correct = str(st.secrets["SETTINGS_PASSWORD"]).strip()
-                    except Exception:
-                        pass
-                if not correct:
-                    correct = str(st.secrets["APP_PASSWORD"]).strip()
-            except Exception:
-                correct = ""
-            st.write("DEBUG correct:", repr(correct))
-            if spwd.strip() == correct:
-                st.session_state.settings_unlocked = True
-                st.rerun()
-            else:
-                st.error("Incorrect password.")
-        st.stop()
 
     st.caption("These appear on every invoice you generate.")
 
