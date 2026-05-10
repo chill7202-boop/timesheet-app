@@ -3,11 +3,16 @@ import duckdb
 import pandas as pd
 import uuid
 import re
+import os
 from datetime import date, datetime
 
 st.set_page_config(page_title="Timesheet", page_icon="🕐", layout="wide")
 
-DB_PATH = "timesheet.duckdb"
+_md_token = os.environ.get('MOTHERDUCK_TOKEN')
+if _md_token:
+    DB_PATH = f"md:timesheet?motherduck_token={_md_token}"
+else:
+    DB_PATH = "timesheet.duckdb"
 
 
 def init_db():
