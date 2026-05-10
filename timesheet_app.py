@@ -874,9 +874,15 @@ if not st.session_state.authenticated:
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
         try:
-            correct = str(st.secrets["APP_PASSWORD"]).strip()
+            con = duckdb.connect(DB_PATH)
+            row = con.execute("SELECT value FROM settings WHERE key='app_password'").fetchone()
+            con.close()
+            correct = row[0].strip() if (row and row[0]) else str(st.secrets["APP_PASSWORD"]).strip()
         except Exception:
-            correct = ""
+            try:
+                correct = str(st.secrets["APP_PASSWORD"]).strip()
+            except Exception:
+                correct = ""
         if pwd.strip() == correct:
             st.session_state.authenticated = True
             st.rerun()
@@ -2019,27 +2025,6 @@ if page == 'settings':
 
     st.divider()
     st.caption(f"Next invoice number will be: **{get_next_invoice_number()}**")
-
-    st.divider()
-    st.markdown("**Change App Password**")
-    st.caption("Password used to log in to the app.")
-    with st.form("change_password_form"):
-        cur_pwd  = st.text_input("Current password", type="password")
-        new_pwd  = st.text_input("New password", type="password")
-        conf_pwd = st.text_input("Confirm new password", type="password")
-        pwd_save = st.form_submit_button("Change App Password")
-
-    if pwd_save:
-        stored = get_setting('app_password', '') or str(st.secrets.get("APP_PASSWORD", "")).strip()
-        if cur_pwd.strip() != stored:
-            st.error("Current password is incorrect.")
-        elif new_pwd != conf_pwd:
-            st.error("New passwords do not match.")
-        elif len(new_pwd.strip()) < 6:
-            st.error("Password must be at least 6 characters.")
-        else:
-            save_setting('app_password', new_pwd.strip())
-            st.success("App password changed.")
 
     st.divider()
     st.markdown("**Change Settings Password**")
