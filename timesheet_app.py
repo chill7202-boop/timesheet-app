@@ -1050,7 +1050,7 @@ if page == 'log':
                         project = proj_df.iloc[idx]['name']
                 with col2:
                     hours = st.number_input("Hours", min_value=0.25, max_value=24.0, step=0.25, value=1.0)
-                    rate  = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=rate_default)
+                    rate  = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=rate_default, key=f"rate_{employee}")
 
                 description = st.text_area("Description", placeholder="What did you work on?")
                 submitted   = st.form_submit_button("Save Entry", type="primary", use_container_width=True)
