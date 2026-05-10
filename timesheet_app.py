@@ -809,6 +809,7 @@ if 'authenticated' not in st.session_state:
 
 if not st.session_state.authenticated:
     st.title("Kingsleyhill Timesheet")
+    st.write("Secret keys found:", list(st.secrets.keys()))
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
         try:
