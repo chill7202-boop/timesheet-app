@@ -1933,6 +1933,25 @@ if page == 'employees':
 if page == 'settings':
     back_button()
     st.subheader("Settings")
+
+    if 'settings_unlocked' not in st.session_state:
+        st.session_state.settings_unlocked = False
+
+    if not st.session_state.settings_unlocked:
+        st.info("Settings are password protected.")
+        spwd = st.text_input("Password", type="password", key="settings_pwd")
+        if st.button("Unlock", type="primary"):
+            try:
+                correct = get_setting('app_password', '').strip() or str(st.secrets["APP_PASSWORD"]).strip()
+            except Exception:
+                correct = ""
+            if spwd.strip() == correct:
+                st.session_state.settings_unlocked = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        st.stop()
+
     st.caption("These appear on every invoice you generate.")
 
     with st.form("settings_form"):
