@@ -812,7 +812,7 @@ if not st.session_state.authenticated:
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
         try:
-            correct = str(st.secrets["APP_PASSWORD"]).strip()
+            correct = get_setting('app_password', '').strip() or str(st.secrets["APP_PASSWORD"]).strip()
         except Exception:
             correct = ""
         if pwd.strip() == correct:
@@ -1043,7 +1043,7 @@ if page == 'timesheet':
                 use_container_width=True, hide_index=True, num_rows="fixed",
                 column_config={
                     'Submit':      st.column_config.CheckboxColumn('Submit', default=False),
-                    'Date':        st.column_config.DateColumn('Date'),
+                    'Date':        st.column_config.DateColumn('Date', format='DD/MM/YYYY'),
                     'Hours':       st.column_config.NumberColumn('Hours', min_value=0.25, step=0.25, format="%.2f"),
                     'Rate ($)':    st.column_config.NumberColumn('Rate ($)', min_value=0, step=5.0, format="%.2f"),
                     'Employee':    st.column_config.TextColumn('Employee'),
@@ -1086,6 +1086,7 @@ if page == 'timesheet':
             submitted_df = submitted_df.reset_index(drop=True)
             sub_display = submitted_df[['entry_date','employee','client','project','description','hours','rate','amount']].copy()
             sub_display.columns = ['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)']
+            sub_display['Date'] = pd.to_datetime(sub_display['Date']).dt.strftime('%d/%m/%Y')
             sub_display.insert(0, 'Approve', False)
             edited_sub = st.data_editor(
                 sub_display,
@@ -1122,6 +1123,7 @@ if page == 'timesheet':
             st.markdown("**Approved** — ready to invoice")
             app_display = approved_df[['entry_date','employee','client','project','description','hours','rate','amount']].copy()
             app_display.columns = ['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)']
+            app_display['Date'] = pd.to_datetime(app_display['Date']).dt.strftime('%d/%m/%Y')
             st.dataframe(app_display, use_container_width=True, hide_index=True)
 
         # ── Invoiced ──
@@ -1131,6 +1133,7 @@ if page == 'timesheet':
                 st.markdown("**Invoiced**")
                 inv_display = invoiced_df[['entry_date','employee','client','project','description','hours','amount']].copy()
                 inv_display.columns = ['Date','Employee','Client','Project','Description','Hours','Amount ($)']
+                inv_display['Date'] = pd.to_datetime(inv_display['Date']).dt.strftime('%d/%m/%Y')
                 st.dataframe(inv_display, use_container_width=True, hide_index=True)
             else:
                 st.caption(f"__{len(invoiced_df)} invoiced {'entry' if len(invoiced_df)==1 else 'entries'} hidden — tick 'Show invoiced entries' to view__")
@@ -1138,6 +1141,7 @@ if page == 'timesheet':
         st.divider()
         export_df = df[['entry_date','employee','client','project','description','hours','rate','amount','status']].copy()
         export_df.columns = ['Date','Employee','Client','Project','Description','Hours','Rate ($)','Amount ($)','Status']
+        export_df['Date'] = pd.to_datetime(export_df['Date']).dt.strftime('%d/%m/%Y')
         csv = export_df.to_csv(index=False)
         st.download_button("Export to CSV", csv, "timesheet.csv", "text/csv")
 
@@ -1901,6 +1905,26 @@ if page == 'settings':
 
     st.divider()
     st.caption(f"Next invoice number will be: **{get_next_invoice_number()}**")
+
+    st.divider()
+    st.markdown("**Change Password**")
+    with st.form("change_password_form"):
+        cur_pwd  = st.text_input("Current password", type="password")
+        new_pwd  = st.text_input("New password", type="password")
+        conf_pwd = st.text_input("Confirm new password", type="password")
+        pwd_save = st.form_submit_button("Change Password")
+
+    if pwd_save:
+        stored = get_setting('app_password', '') or str(st.secrets.get("APP_PASSWORD", "")).strip()
+        if cur_pwd.strip() != stored:
+            st.error("Current password is incorrect.")
+        elif new_pwd != conf_pwd:
+            st.error("New passwords do not match.")
+        elif len(new_pwd.strip()) < 6:
+            st.error("Password must be at least 6 characters.")
+        else:
+            save_setting('app_password', new_pwd.strip())
+            st.success("Password changed.")
 
     st.divider()
     st.markdown("**Danger Zone**")
