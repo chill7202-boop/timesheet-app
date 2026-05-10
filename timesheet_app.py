@@ -827,6 +827,30 @@ st.markdown("""<style>
 .stAppDeployButton { display: none !important; }
 [data-testid="stAppDeployButton"] { display: none !important; }
 
+/* ── Mobile responsiveness ── */
+@media (max-width: 640px) {
+    /* Stack columns vertically on phones */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="column"] {
+        min-width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+    /* Prevent iOS auto-zoom on input focus */
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+    /* Make tables scroll horizontally instead of overflowing */
+    [data-testid="stDataFrame"] > div,
+    [data-testid="stDataEditor"] > div {
+        overflow-x: auto !important;
+    }
+    /* Full-width buttons in forms */
+    .stButton > button {
+        width: 100% !important;
+    }
+}
 </style>""", unsafe_allow_html=True)
 
 if 'page' not in st.session_state:
