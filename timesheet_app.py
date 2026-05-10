@@ -100,14 +100,16 @@ def init_db():
     con.close()
 
 
+@st.cache_data(ttl=60)
 def get_employees():
     con = duckdb.connect(DB_PATH)
     df = con.execute("SELECT * FROM employees ORDER BY name").df()
     con.close()
-    return df
+    return df.copy()
 
 
 def save_employee(emp_id, name, email, role, rate):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     if emp_id:
         con.execute(
@@ -123,19 +125,22 @@ def save_employee(emp_id, name, email, role, rate):
 
 
 def delete_employee(emp_id):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute("DELETE FROM employees WHERE id = ?", [emp_id])
     con.close()
 
 
+@st.cache_data(ttl=60)
 def get_clients_list():
     con = duckdb.connect(DB_PATH)
     df = con.execute("SELECT * FROM clients ORDER BY name").df()
     con.close()
-    return df
+    return df.copy()
 
 
 def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0, website=''):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     if client_id:
         con.execute(
@@ -151,11 +156,13 @@ def save_client(client_id, name, address, contact_name, email, billing_type='hou
 
 
 def delete_client(client_id):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute("DELETE FROM clients WHERE id = ?", [client_id])
     con.close()
 
 
+@st.cache_data(ttl=60)
 def get_setting(key, default=''):
     con = duckdb.connect(DB_PATH)
     row = con.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
@@ -164,12 +171,14 @@ def get_setting(key, default=''):
 
 
 def save_setting(key, value):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", [key, value])
     con.close()
 
 
 def add_entry(entry_date, client, project, description, hours, rate, employee='Self'):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute(
         "INSERT INTO entries (id, entry_date, client, project, description, hours, rate, employee, status) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -178,6 +187,7 @@ def add_entry(entry_date, client, project, description, hours, rate, employee='S
     con.close()
 
 
+@st.cache_data(ttl=60)
 def load_entries(client=None, project=None, from_date=None, to_date=None, employee=None, status=None):
     con = duckdb.connect(DB_PATH)
     query = "SELECT * FROM entries WHERE 1=1"
@@ -212,18 +222,21 @@ def load_entries(client=None, project=None, from_date=None, to_date=None, employ
 
 
 def delete_entry(entry_id):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute("DELETE FROM entries WHERE id = ?", [entry_id])
     con.close()
 
 
 def set_status(entry_id, status):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute("UPDATE entries SET status = ? WHERE id = ?", [status, entry_id])
     con.close()
 
 
 def set_status_bulk(ids, status):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     for i in ids:
         con.execute("UPDATE entries SET status = ? WHERE id = ?", [status, i])
@@ -251,6 +264,7 @@ def increment_invoice_number():
 
 
 def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet'):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute(
         "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -259,6 +273,7 @@ def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hou
     con.close()
 
 
+@st.cache_data(ttl=60)
 def get_invoices(client=None):
     con = duckdb.connect(DB_PATH)
     q = "SELECT * FROM invoices WHERE 1=1"
@@ -273,6 +288,7 @@ def get_invoices(client=None):
 
 
 def mark_invoice_paid(invoice_id, paid=True):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     if paid:
         con.execute("UPDATE invoices SET paid=TRUE,  paid_date=? WHERE id=?", [date.today(), invoice_id])
@@ -288,6 +304,7 @@ def invoice_number_exists(inv_number):
     return row[0] > 0
 
 
+@st.cache_data(ttl=60)
 def get_clients():
     con = duckdb.connect(DB_PATH)
     rows = con.execute("SELECT DISTINCT client FROM entries ORDER BY client").fetchall()
@@ -295,6 +312,7 @@ def get_clients():
     return [r[0] for r in rows]
 
 
+@st.cache_data(ttl=60)
 def get_projects(client=None):
     con = duckdb.connect(DB_PATH)
     if client:
@@ -307,6 +325,7 @@ def get_projects(client=None):
     return [r[0] for r in rows]
 
 
+@st.cache_data(ttl=60)
 def get_projects_list(client_id=None):
     con = duckdb.connect(DB_PATH)
     if client_id:
@@ -318,6 +337,7 @@ def get_projects_list(client_id=None):
 
 
 def save_project(project_id, code, name, client_id=None):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     if project_id:
         con.execute("UPDATE projects SET code=?, name=?, client_id=? WHERE id=?", [code, name, client_id, project_id])
@@ -327,6 +347,7 @@ def save_project(project_id, code, name, client_id=None):
 
 
 def delete_project(project_id):
+    st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute("DELETE FROM projects WHERE id=?", [project_id])
     con.close()
