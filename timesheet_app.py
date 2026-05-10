@@ -800,6 +800,15 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
 
 init_db()
 
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+if not st.experimental_user.is_logged_in:
+    st.title("Kingsleyhill Timesheet")
+    st.info("Please sign in to continue.")
+    if st.button("Sign in"):
+        st.login()
+    st.stop()
+
 st.markdown("""<style>
 .stAppDeployButton { display: none !important; }
 [data-testid="stAppDeployButton"] { display: none !important; }
