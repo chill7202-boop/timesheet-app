@@ -874,15 +874,9 @@ if not st.session_state.authenticated:
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
         try:
-            con = duckdb.connect(DB_PATH)
-            row = con.execute("SELECT value FROM settings WHERE key='app_password'").fetchone()
-            con.close()
-            correct = row[0].strip() if (row and row[0]) else str(st.secrets["APP_PASSWORD"]).strip()
+            correct = str(st.secrets["APP_PASSWORD"]).strip()
         except Exception:
-            try:
-                correct = str(st.secrets["APP_PASSWORD"]).strip()
-            except Exception:
-                correct = ""
+            correct = ""
         if pwd.strip() == correct:
             st.session_state.authenticated = True
             st.rerun()
