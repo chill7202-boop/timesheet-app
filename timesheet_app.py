@@ -811,7 +811,11 @@ if not st.session_state.authenticated:
     st.title("Kingsleyhill Timesheet")
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
-        if pwd == st.secrets.get("APP_PASSWORD", "").strip():
+        try:
+            correct = str(st.secrets["APP_PASSWORD"]).strip()
+        except Exception:
+            correct = ""
+        if pwd.strip() == correct:
             st.session_state.authenticated = True
             st.rerun()
         else:
