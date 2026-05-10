@@ -353,6 +353,46 @@ def delete_project(project_id):
     con.close()
 
 
+@st.cache_data(ttl=60)
+def get_dashboard_data():
+    con = duckdb.connect(DB_PATH)
+    today = date.today()
+    yr, mo = today.year, today.month
+    three_months_ago = (today.replace(day=1) - pd.DateOffset(months=3)).date()
+
+    revenue = con.execute("""
+        SELECT
+            COALESCE(SUM(total), 0)                              AS total_invoiced,
+            COALESCE(SUM(CASE WHEN paid THEN total ELSE 0 END), 0) AS paid,
+            COALESCE(SUM(CASE WHEN NOT paid THEN total ELSE 0 END),0) AS outstanding
+        FROM invoices
+        WHERE year(invoice_date)=? AND month(invoice_date)=?
+    """, [yr, mo]).fetchone()
+
+    hours = con.execute("""
+        SELECT client, ROUND(SUM(hours),2) AS hours
+        FROM entries
+        WHERE year(entry_date)=? AND month(entry_date)=?
+        GROUP BY client ORDER BY hours DESC
+    """, [yr, mo]).df()
+
+    unpaid = con.execute("""
+        SELECT client, invoice_number, invoice_date, total
+        FROM invoices WHERE paid=FALSE
+        ORDER BY invoice_date
+    """).df()
+
+    top_clients = con.execute("""
+        SELECT client, ROUND(SUM(total),2) AS revenue
+        FROM invoices
+        WHERE invoice_date >= ?
+        GROUP BY client ORDER BY revenue DESC LIMIT 10
+    """, [three_months_ago]).df()
+
+    con.close()
+    return revenue, hours.copy(), unpaid.copy(), top_clients.copy()
+
+
 def _abr_json(resp_text):
     """Strip JSONP wrapper and parse."""
     import json as _json
@@ -930,6 +970,7 @@ if page == 'home':
 
     tiles = [
         ("🕐", "Log Time",   'log',        True),
+        ("📊", "Dashboard",  'dashboard',  False),
         ("📋", "Timesheet",  'timesheet',  False),
         ("🧾", "Invoice",    'invoice',    False),
         ("👥", "Clients",    'clients',    False),
@@ -2150,3 +2191,47 @@ if page == 'statements':
         export = view_df[['invoice_number','client','invoice_date','invoice_type','subtotal','gst','total','paid','paid_date']].copy()
         export.columns = ['Invoice #','Client','Date','Type','Subtotal','GST','Total','Paid','Paid Date']
         st.download_button("⬇ Export to CSV", export.to_csv(index=False), "statements.csv", "text/csv")
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+if page == 'dashboard':
+    back_button()
+    st.subheader("Dashboard")
+
+    revenue, hours_df, unpaid_df, top_clients_df = get_dashboard_data()
+    total_invoiced, paid, outstanding = float(revenue[0]), float(revenue[1]), float(revenue[2])
+    month_label = date.today().strftime('%B %Y')
+
+    # ── This month ──
+    st.markdown(f"#### {month_label}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Invoiced",    f"${total_invoiced:,.0f}")
+    m2.metric("Paid",        f"${paid:,.0f}")
+    m3.metric("Outstanding", f"${outstanding:,.0f}")
+    m4.metric("Hours Logged", f"{hours_df['hours'].sum():.1f}h" if not hours_df.empty else "0h")
+
+    # ── Hours by client this month ──
+    if not hours_df.empty:
+        st.divider()
+        st.markdown("#### Hours by Client — This Month")
+        st.bar_chart(hours_df.set_index('client')['hours'])
+
+    # ── Unpaid invoices ──
+    st.divider()
+    st.markdown("#### Unpaid Invoices")
+    if unpaid_df.empty:
+        st.success("No outstanding invoices.")
+    else:
+        total_owed = unpaid_df['total'].sum()
+        st.caption(f"{len(unpaid_df)} invoice{'s' if len(unpaid_df)>1 else ''} — **${float(total_owed):,.2f}** total outstanding")
+        display = unpaid_df.copy()
+        display['invoice_date'] = pd.to_datetime(display['invoice_date']).dt.strftime('%d/%m/%Y')
+        display['total'] = display['total'].apply(lambda x: f"${float(x):,.2f}")
+        display.columns = ['Client', 'Invoice #', 'Date', 'Amount']
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+    # ── Top clients last 3 months ──
+    if not top_clients_df.empty:
+        st.divider()
+        st.markdown("#### Top Clients — Last 3 Months")
+        st.bar_chart(top_clients_df.set_index('client')['revenue'])
