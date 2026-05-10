@@ -1018,6 +1018,19 @@ if page == 'log':
 
         if selected_client:
             st.markdown(f"**Client:** {selected_client}")
+
+            # Employee selector outside form so rate updates immediately on change
+            emp_df      = get_employees()
+            emp_options = ['Self'] + emp_df['name'].tolist() if not emp_df.empty else ['Self']
+            employee    = st.selectbox("Employee", emp_options, key="log_employee")
+
+            # Determine rate default based on selected employee
+            rate_default = float(get_setting('default_rate', '0') or 0)
+            if employee != 'Self' and not emp_df.empty:
+                emp_row = emp_df[emp_df['name'] == employee]
+                if not emp_row.empty and float(emp_row.iloc[0]['rate'] or 0) > 0:
+                    rate_default = float(emp_row.iloc[0]['rate'])
+
             with st.form("log_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -1035,18 +1048,9 @@ if page == 'log':
                         proj_sel = st.selectbox("Project", proj_options)
                         idx = proj_options.index(proj_sel)
                         project = proj_df.iloc[idx]['name']
-                    emp_df       = get_employees()
-                    emp_options  = ['Self'] + emp_df['name'].tolist() if not emp_df.empty else ['Self']
-                    employee     = st.selectbox("Employee", emp_options)
                 with col2:
-                    hours        = st.number_input("Hours", min_value=0.25, max_value=24.0, step=0.25, value=1.0)
-                    rate_default = float(get_setting('default_rate', '0') or 0)
-                    # Auto-fill rate from employee record if not Self
-                    if employee != 'Self' and not emp_df.empty:
-                        emp_row = emp_df[emp_df['name'] == employee]
-                        if not emp_row.empty and float(emp_row.iloc[0]['rate'] or 0) > 0:
-                            rate_default = float(emp_row.iloc[0]['rate'])
-                    rate = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=rate_default)
+                    hours = st.number_input("Hours", min_value=0.25, max_value=24.0, step=0.25, value=1.0)
+                    rate  = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=rate_default)
 
                 description = st.text_area("Description", placeholder="What did you work on?")
                 submitted   = st.form_submit_button("Save Entry", type="primary", use_container_width=True)
