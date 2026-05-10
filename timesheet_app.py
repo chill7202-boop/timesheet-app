@@ -8,7 +8,11 @@ from datetime import date, datetime
 
 st.set_page_config(page_title="Timesheet", page_icon="🕐", layout="wide")
 
-_md_token = os.environ.get('MOTHERDUCK_TOKEN')
+try:
+    _md_token = st.secrets.get("MOTHERDUCK_TOKEN", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
+except Exception:
+    _md_token = os.environ.get('MOTHERDUCK_TOKEN', '').strip()
+
 if _md_token:
     DB_PATH = f"md:timesheet?motherduck_token={_md_token}"
 else:
@@ -800,14 +804,6 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
 
 init_db()
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
-
-if not st.experimental_user.is_logged_in:
-    st.title("Kingsleyhill Timesheet")
-    st.info("Please sign in to continue.")
-    if st.button("Sign in"):
-        st.login()
-    st.stop()
 
 st.markdown("""<style>
 .stAppDeployButton { display: none !important; }
