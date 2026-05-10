@@ -1612,7 +1612,7 @@ if page == 'clients':
         else:
             srch_col, btn_col = st.columns([3, 1], vertical_alignment="bottom")
             abr_query = srch_col.text_input("Search business name or ABN", key="abr_query",
-                                            placeholder="e.g. COSOL or 12 345 678 901")
+                                            placeholder="e.g. Company or ABN")
             if btn_col.button("Search ABR", key="abr_search_btn", use_container_width=True):
                 if abr_query.strip():
                     with st.spinner("Searching…"):
