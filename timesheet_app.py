@@ -1021,12 +1021,15 @@ if page == 'log':
 
             # Employee and rate outside form so they react immediately
             emp_df      = get_employees()
-            emp_options = ['Self'] + emp_df['name'].tolist() if not emp_df.empty else ['Self']
+            emp_options = emp_df['name'].tolist() if not emp_df.empty else []
             ec1, ec2    = st.columns(2)
-            employee    = ec1.selectbox("Employee", emp_options, key="log_employee")
 
             rate_default = float(get_setting('default_rate', '0') or 0)
-            if employee != 'Self' and not emp_df.empty:
+            if not emp_options:
+                st.warning("Add employees in the **Employees** page before logging time.")
+                employee = ''
+            else:
+                employee = ec1.selectbox("Employee", emp_options, key="log_employee")
                 emp_row = emp_df[emp_df['name'] == employee]
                 if not emp_row.empty and float(emp_row.iloc[0]['rate'] or 0) > 0:
                     rate_default = float(emp_row.iloc[0]['rate'])
