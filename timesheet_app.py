@@ -2026,28 +2026,6 @@ if page == 'settings':
     st.divider()
     st.caption(f"Next invoice number will be: **{get_next_invoice_number()}**")
 
-    st.divider()
-    st.markdown("**Change Settings Password**")
-    st.caption("Separate password required to access this Settings page.")
-    with st.form("change_settings_password_form"):
-        cur_spwd  = st.text_input("Current settings password", type="password")
-        new_spwd  = st.text_input("New settings password", type="password")
-        conf_spwd = st.text_input("Confirm new settings password", type="password")
-        spwd_save = st.form_submit_button("Change Settings Password")
-
-    if spwd_save:
-        stored_s = (get_setting('settings_password', '').strip()
-                    or str(st.secrets.get("SETTINGS_PASSWORD", "")).strip()
-                    or str(st.secrets.get("APP_PASSWORD", "")).strip())
-        if cur_spwd.strip() != stored_s:
-            st.error("Current settings password is incorrect.")
-        elif new_spwd != conf_spwd:
-            st.error("New passwords do not match.")
-        elif len(new_spwd.strip()) < 6:
-            st.error("Password must be at least 6 characters.")
-        else:
-            save_setting('settings_password', new_spwd.strip())
-            st.success("Settings password changed.")
 
     st.divider()
     st.markdown("**Danger Zone**")
