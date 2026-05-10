@@ -1944,9 +1944,15 @@ if page == 'settings':
             try:
                 correct = get_setting('settings_password', '').strip()
                 if not correct:
+                    try:
+                        correct = str(st.secrets["SETTINGS_PASSWORD"]).strip()
+                    except Exception:
+                        pass
+                if not correct:
                     correct = str(st.secrets["APP_PASSWORD"]).strip()
             except Exception:
                 correct = ""
+            st.write("DEBUG correct:", repr(correct))
             if spwd.strip() == correct:
                 st.session_state.settings_unlocked = True
                 st.rerun()
