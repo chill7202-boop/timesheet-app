@@ -1942,7 +1942,9 @@ if page == 'settings':
         spwd = st.text_input("Password", type="password", key="settings_pwd")
         if st.button("Unlock", type="primary"):
             try:
-                correct = get_setting('app_password', '').strip() or str(st.secrets["APP_PASSWORD"]).strip()
+                correct = (get_setting('settings_password', '').strip()
+                           or str(st.secrets.get("SETTINGS_PASSWORD", "")).strip()
+                           or str(st.secrets["APP_PASSWORD"]).strip())
             except Exception:
                 correct = ""
             if spwd.strip() == correct:
@@ -2021,12 +2023,13 @@ if page == 'settings':
     st.caption(f"Next invoice number will be: **{get_next_invoice_number()}**")
 
     st.divider()
-    st.markdown("**Change Password**")
+    st.markdown("**Change App Password**")
+    st.caption("Password used to log in to the app.")
     with st.form("change_password_form"):
         cur_pwd  = st.text_input("Current password", type="password")
         new_pwd  = st.text_input("New password", type="password")
         conf_pwd = st.text_input("Confirm new password", type="password")
-        pwd_save = st.form_submit_button("Change Password")
+        pwd_save = st.form_submit_button("Change App Password")
 
     if pwd_save:
         stored = get_setting('app_password', '') or str(st.secrets.get("APP_PASSWORD", "")).strip()
@@ -2038,7 +2041,30 @@ if page == 'settings':
             st.error("Password must be at least 6 characters.")
         else:
             save_setting('app_password', new_pwd.strip())
-            st.success("Password changed.")
+            st.success("App password changed.")
+
+    st.divider()
+    st.markdown("**Change Settings Password**")
+    st.caption("Separate password required to access this Settings page.")
+    with st.form("change_settings_password_form"):
+        cur_spwd  = st.text_input("Current settings password", type="password")
+        new_spwd  = st.text_input("New settings password", type="password")
+        conf_spwd = st.text_input("Confirm new settings password", type="password")
+        spwd_save = st.form_submit_button("Change Settings Password")
+
+    if spwd_save:
+        stored_s = (get_setting('settings_password', '').strip()
+                    or str(st.secrets.get("SETTINGS_PASSWORD", "")).strip()
+                    or str(st.secrets.get("APP_PASSWORD", "")).strip())
+        if cur_spwd.strip() != stored_s:
+            st.error("Current settings password is incorrect.")
+        elif new_spwd != conf_spwd:
+            st.error("New passwords do not match.")
+        elif len(new_spwd.strip()) < 6:
+            st.error("Password must be at least 6 characters.")
+        else:
+            save_setting('settings_password', new_spwd.strip())
+            st.success("Settings password changed.")
 
     st.divider()
     st.markdown("**Danger Zone**")
