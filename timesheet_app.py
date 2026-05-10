@@ -848,6 +848,11 @@ st.markdown("""<style>
 .stAppDeployButton { display: none !important; }
 [data-testid="stAppDeployButton"] { display: none !important; }
 
+/* ── Compact client list ── */
+div.client-list [data-testid="stHorizontalBlock"] {
+    margin-bottom: -0.75rem !important;
+}
+
 /* ── Mobile responsiveness ── */
 @media (max-width: 640px) {
     /* Stack columns vertically on phones */
@@ -1745,11 +1750,13 @@ if page == 'clients':
         if client_records.empty:
             st.info("No clients saved yet.")
         else:
+            st.markdown('<div class="client-list">', unsafe_allow_html=True)
             for _, row in client_records.iterrows():
-                c1, c2, c3 = st.columns([3, 1, 1])
-                c1.write(f"**{row['name']}**")
+                c1, c2, c3 = st.columns([3, 1, 1], vertical_alignment="center")
+                label = f"**{row['name']}**"
                 if row['contact_name']:
-                    c1.caption(row['contact_name'])
+                    label += f"  \n<small>{row['contact_name']}</small>"
+                c1.markdown(label, unsafe_allow_html=True)
                 if c2.button("Edit", key=f"edit_{row['id']}"):
                     st.session_state['editing_client'] = row['id']
                     st.session_state.pop('client_apply', None)
@@ -1758,6 +1765,7 @@ if page == 'clients':
                 if c3.button("Delete", key=f"del_{row['id']}"):
                     delete_client(row['id'])
                     st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Employees ─────────────────────────────────────────────────────────────────
 
