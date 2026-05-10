@@ -85,6 +85,7 @@ def init_db():
         "ALTER TABLE clients ADD COLUMN billing_type VARCHAR DEFAULT 'hourly'",
         "ALTER TABLE clients ADD COLUMN day_rate DECIMAL(8,2) DEFAULT 0",
         "ALTER TABLE clients ADD COLUMN website VARCHAR",
+        "ALTER TABLE clients ADD COLUMN abn VARCHAR",
         "ALTER TABLE projects ADD COLUMN client_id VARCHAR",
     ]:
         try:
@@ -1653,7 +1654,7 @@ if page == 'clients':
                     st.caption("No results.")
             st.divider()
 
-        c_name    = st.text_input("Company name", key="cf_name")
+        c_name    = st.text_input("Company name", key="cf_name", placeholder="e.g. Acme Corp")
         c_address = st.text_area("Address",       key="cf_address", height=80)
         c_contact = st.text_input("Contact name", key="cf_contact")
         c_email   = st.text_input("Email",        key="cf_email")
