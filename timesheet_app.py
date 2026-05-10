@@ -1942,9 +1942,9 @@ if page == 'settings':
         spwd = st.text_input("Password", type="password", key="settings_pwd")
         if st.button("Unlock", type="primary"):
             try:
-                correct = (get_setting('settings_password', '').strip()
-                           or str(st.secrets.get("SETTINGS_PASSWORD", "")).strip()
-                           or str(st.secrets["APP_PASSWORD"]).strip())
+                correct = get_setting('settings_password', '').strip()
+                if not correct:
+                    correct = str(st.secrets["APP_PASSWORD"]).strip()
             except Exception:
                 correct = ""
             if spwd.strip() == correct:
