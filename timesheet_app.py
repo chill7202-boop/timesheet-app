@@ -871,6 +871,11 @@ if 'authenticated' not in st.session_state:
 
 if not st.session_state.authenticated:
     st.title("Kingsleyhill Timesheet")
+    try:
+        _app_pwd_len = len(str(st.secrets["APP_PASSWORD"]).strip())
+        st.caption(f"DEBUG: APP_PASSWORD found, length={_app_pwd_len}")
+    except Exception as _e:
+        st.caption(f"DEBUG: APP_PASSWORD error — {_e}")
     pwd = st.text_input("Password", type="password")
     if st.button("Sign in"):
         try:
