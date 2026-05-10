@@ -2,6 +2,7 @@ import streamlit as st
 import duckdb
 import pandas as pd
 import uuid
+import re
 from datetime import date, datetime
 
 st.set_page_config(page_title="Timesheet", page_icon="🕐", layout="wide")
@@ -47,6 +48,13 @@ def init_db():
         )
     """)
     con.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id   VARCHAR PRIMARY KEY,
+            code VARCHAR,
+            name VARCHAR
+        )
+    """)
+    con.execute("""
         CREATE TABLE IF NOT EXISTS invoices (
             id            VARCHAR PRIMARY KEY,
             invoice_number VARCHAR,
@@ -67,6 +75,8 @@ def init_db():
         "ALTER TABLE entries ADD COLUMN status VARCHAR DEFAULT 'open'",
         "ALTER TABLE clients ADD COLUMN billing_type VARCHAR DEFAULT 'hourly'",
         "ALTER TABLE clients ADD COLUMN day_rate DECIMAL(8,2) DEFAULT 0",
+        "ALTER TABLE clients ADD COLUMN website VARCHAR",
+        "ALTER TABLE projects ADD COLUMN client_id VARCHAR",
     ]:
         try:
             con.execute(col)
@@ -115,17 +125,17 @@ def get_clients_list():
     return df
 
 
-def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0):
+def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0, website=''):
     con = duckdb.connect(DB_PATH)
     if client_id:
         con.execute(
-            "UPDATE clients SET name=?, address=?, contact_name=?, email=?, billing_type=?, day_rate=? WHERE id=?",
-            [name, address, contact_name, email, billing_type, day_rate, client_id]
+            "UPDATE clients SET name=?, address=?, contact_name=?, email=?, billing_type=?, day_rate=?, website=? WHERE id=?",
+            [name, address, contact_name, email, billing_type, day_rate, website, client_id]
         )
     else:
         con.execute(
-            "INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate]
+            "INSERT INTO clients (id,name,address,contact_name,email,billing_type,day_rate,website) VALUES (?,?,?,?,?,?,?,?)",
+            [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate, website]
         )
     con.close()
 
@@ -286,6 +296,94 @@ def get_projects(client=None):
     con.close()
     return [r[0] for r in rows]
 
+
+def get_projects_list(client_id=None):
+    con = duckdb.connect(DB_PATH)
+    if client_id:
+        df = con.execute("SELECT * FROM projects WHERE client_id=? ORDER BY code, name", [client_id]).df()
+    else:
+        df = con.execute("SELECT * FROM projects ORDER BY code, name").df()
+    con.close()
+    return df
+
+
+def save_project(project_id, code, name, client_id=None):
+    con = duckdb.connect(DB_PATH)
+    if project_id:
+        con.execute("UPDATE projects SET code=?, name=?, client_id=? WHERE id=?", [code, name, client_id, project_id])
+    else:
+        con.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", [str(uuid.uuid4()), code, name, client_id])
+    con.close()
+
+
+def delete_project(project_id):
+    con = duckdb.connect(DB_PATH)
+    con.execute("DELETE FROM projects WHERE id=?", [project_id])
+    con.close()
+
+
+def _abr_json(resp_text):
+    """Strip JSONP wrapper and parse."""
+    import json as _json
+    t = resp_text.strip()
+    if t.startswith('callback(') and t.endswith(')'):
+        t = t[9:-1]
+    return _json.loads(t)
+
+def abr_search(query, guid):
+    """Search ABR by business name or ABN. Returns list of dicts."""
+    import httpx
+    query = query.strip()
+    is_abn = bool(re.match(r'^\d[\d\s]{9,12}\d$', query))
+    try:
+        if is_abn:
+            abn_clean = re.sub(r'\s', '', query)
+            resp = httpx.get('https://abr.business.gov.au/json/AbnDetails.aspx',
+                             params={'abn': abn_clean, 'guid': guid}, timeout=10)
+            data = _abr_json(resp.text)
+            if data.get('AbnStatus') == 'Active':
+                name = data.get('EntityName', '')
+                bnames = [b for b in data.get('BusinessName', []) if b]
+                if bnames: name = bnames[0]
+                state, pc = data.get('AddressState', ''), data.get('AddressPostcode', '')
+                return [{'abn': data.get('Abn',''), 'name': name,
+                         'state': state, 'postcode': pc,
+                         'address': f'{state} {pc}'.strip()}]
+            return []
+        else:
+            resp = httpx.get('https://abr.business.gov.au/json/MatchingNames.aspx',
+                             params={'name': query, 'guid': guid}, timeout=10)
+            data = _abr_json(resp.text)
+            results = []
+            for entry in data.get('Names', []):
+                parts = [p.strip() for p in entry.strip().split('\n') if p.strip()]
+                if len(parts) >= 2:
+                    name   = parts[0]
+                    abn    = re.sub(r'\s', '', parts[1])
+                    status = parts[2] if len(parts) > 2 else ''
+                    if 'Active' in status:
+                        results.append({'abn': abn, 'name': name,
+                                        'state': '', 'postcode': '', 'address': ''})
+            return results[:15]
+    except Exception:
+        return []
+
+def abr_get_detail(abn, guid):
+    """Fetch ABN details. Returns dict with name, state, postcode."""
+    import httpx
+    try:
+        resp = httpx.get('https://abr.business.gov.au/json/AbnDetails.aspx',
+                         params={'abn': abn, 'guid': guid}, timeout=10)
+        data = _abr_json(resp.text)
+        name = data.get('EntityName', '')
+        bnames = [b for b in data.get('BusinessName', []) if b]
+        if bnames: name = bnames[0]
+        state, pc = data.get('AddressState', ''), data.get('AddressPostcode', '')
+        return {'abn': data.get('Abn', ''), 'name': name,
+                'state': state, 'postcode': pc,
+                'address': f'{state} {pc}'.strip()}
+    except Exception:
+        return {}
 
 def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None):
     my_name    = settings.get('name', '')
@@ -757,6 +855,7 @@ if page == 'home':
         ("📋", "Timesheet",  'timesheet',  False),
         ("🧾", "Invoice",    'invoice',    False),
         ("👥", "Clients",    'clients',    False),
+        ("📁", "Projects",   'projects',   False),
         ("👤", "Employees",  'employees',  False),
         ("📄", "Statements", 'statements', False),
         ("⚙️", "Settings",  'settings',   False),
@@ -804,7 +903,19 @@ if page == 'log':
                 col1, col2 = st.columns(2)
                 with col1:
                     entry_date   = st.date_input("Date", value=date.today())
-                    project      = st.text_input("Project / Matter")
+                    # Get client_id for selected client, then filter projects
+                    _cl_row  = saved_clients[saved_clients['name'] == selected_client]
+                    _cl_id   = _cl_row.iloc[0]['id'] if not _cl_row.empty else None
+                    proj_df  = get_projects_list(client_id=_cl_id) if _cl_id else get_projects_list()
+                    if proj_df.empty:
+                        st.warning("No projects for this client — add them in the **Projects** page.")
+                        project = None
+                    else:
+                        proj_options = [f"{r['code']} — {r['name']}" if r['code'] else r['name']
+                                        for _, r in proj_df.iterrows()]
+                        proj_sel = st.selectbox("Project", proj_options)
+                        idx = proj_options.index(proj_sel)
+                        project = proj_df.iloc[idx]['name']
                     emp_df       = get_employees()
                     emp_options  = ['Self'] + emp_df['name'].tolist() if not emp_df.empty else ['Self']
                     employee     = st.selectbox("Employee", emp_options)
@@ -822,8 +933,10 @@ if page == 'log':
                 submitted   = st.form_submit_button("Save Entry", type="primary", use_container_width=True)
 
             if submitted:
-                if not project or not description:
-                    st.error("Project and description are required.")
+                if not project:
+                    st.error("Set up projects in the Projects page before logging time.")
+                elif not description:
+                    st.error("Description is required.")
                 elif hours <= 0:
                     st.error("Hours must be greater than 0.")
                 else:
@@ -1095,7 +1208,12 @@ if page == 'invoice':
 
             col1, col2 = st.columns(2)
             with col2:
-                client_address = st.text_area("Client address", value=prefill_address, height=80)
+                client_address = prefill_address
+                if client_address:
+                    st.markdown(f"**Client address**")
+                    st.caption(client_address)
+                else:
+                    st.caption("No address on file — add it on the Clients page.")
                 include_gst    = st.checkbox("Include GST (10%)", value=True)
 
             if inv_mode == 'timesheet':
@@ -1324,6 +1442,80 @@ if page == 'invoice':
                 with st.expander("Preview"):
                     st.components.v1.html(inv_data['html'], height=700, scrolling=True)
 
+# ── Projects ──────────────────────────────────────────────────────────────────
+
+if page == 'projects':
+    back_button()
+    st.subheader("Projects")
+
+    proj_df      = get_projects_list()
+    client_df    = get_clients_list()
+    client_opts  = {row['id']: row['name'] for _, row in client_df.iterrows()}
+    col_list, col_form = st.columns([1, 1])
+
+    with col_form:
+        st.markdown("**Add / Edit project**")
+        editing = st.session_state.get('editing_project')
+
+        if editing and not proj_df.empty:
+            row = proj_df[proj_df['id'] == editing]
+            if not row.empty:
+                row = row.iloc[0]
+                f_code, f_name = row['code'] or '', row['name'] or ''
+                f_client_id    = row.get('client_id') or ''
+            else:
+                editing = None
+                f_code = f_name = f_client_id = ''
+        else:
+            f_code = f_name = f_client_id = ''
+
+        with st.form("proj_form", clear_on_submit=True):
+            # Client selector
+            cl_ids   = [''] + list(client_opts.keys())
+            cl_names = ['— No client —'] + list(client_opts.values())
+            cl_idx   = cl_ids.index(f_client_id) if f_client_id in cl_ids else 0
+            p_client = st.selectbox("Client", cl_names, index=cl_idx)
+            p_client_id = cl_ids[cl_names.index(p_client)]
+
+            p_code = st.text_input("Project code", value=f_code, placeholder="e.g. P001")
+            p_name = st.text_input("Project name", value=f_name, placeholder="e.g. Website Redesign")
+            save_btn = st.form_submit_button("Save Project", type="primary", use_container_width=True)
+
+        if save_btn:
+            if not p_name:
+                st.error("Project name is required.")
+            else:
+                save_project(editing, p_code.strip(), p_name.strip(), p_client_id or None)
+                st.session_state.pop('editing_project', None)
+                st.success(f"{'Updated' if editing else 'Saved'}: {p_name}")
+                st.rerun()
+
+        if editing and st.button("Cancel edit", key="cancel_proj"):
+            st.session_state.pop('editing_project', None)
+            st.rerun()
+
+    with col_list:
+        st.markdown("**Saved projects**")
+        if proj_df.empty:
+            st.info("No projects added yet.")
+        else:
+            # Group by client
+            for cid, cname in [('', '— No client —')] + [(k, v) for k, v in client_opts.items()]:
+                grp = proj_df[proj_df['client_id'] == cid] if cid else proj_df[proj_df['client_id'].isna() | (proj_df['client_id'] == '')]
+                if grp.empty:
+                    continue
+                st.caption(cname)
+                for _, row in grp.iterrows():
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    label = f"**{row['code']}** — {row['name']}" if row['code'] else f"**{row['name']}**"
+                    c1.markdown(label)
+                    if c2.button("Edit",   key=f"pedit_{row['id']}"):
+                        st.session_state['editing_project'] = row['id']
+                        st.rerun()
+                    if c3.button("Delete", key=f"pdel_{row['id']}"):
+                        delete_project(row['id'])
+                        st.rerun()
+
 # ── Clients ───────────────────────────────────────────────────────────────────
 
 if page == 'clients':
@@ -1339,24 +1531,103 @@ if page == 'clients':
         editing = st.session_state.get('editing_client')
 
         if editing:
-            row = client_records[client_records['id'] == editing].iloc[0]
-            form_name         = row['name']
-            form_address      = row['address'] or ''
-            form_contact_name = row['contact_name'] or ''
-            form_email        = row['email'] or ''
-            _bt               = row.get('billing_type', 'hourly')
-            form_billing_type = _bt if _bt in ('hourly', 'day_rate') else 'hourly'
-            form_day_rate     = float(row.get('day_rate', 0) or 0)
-        else:
-            form_name = form_address = form_contact_name = form_email = ''
+            _match = client_records[client_records['id'] == editing]
+            if _match.empty:
+                editing = None
+                st.session_state.pop('editing_client', None)
+            else:
+                row = _match.iloc[0]
+                form_name         = row['name']
+                form_address      = row['address'] or ''
+                form_contact_name = row['contact_name'] or ''
+                form_email        = row['email'] or ''
+                _bt               = row.get('billing_type', 'hourly')
+                form_billing_type = _bt if _bt in ('hourly', 'day_rate') else 'hourly'
+                form_day_rate     = float(row.get('day_rate', 0) or 0)
+        if not editing:
+            form_name = form_address = form_contact_name = form_email = form_website = ''
             form_billing_type = 'hourly'
             form_day_rate     = 0.0
+        else:
+            form_website = row.get('website', '') or ''
 
-        with st.form("client_form", clear_on_submit=True):
-            c_name    = st.text_input("Company name", value=form_name)
-            c_address = st.text_area("Address", value=form_address, height=80)
-            c_contact = st.text_input("Contact name", value=form_contact_name)
-            c_email   = st.text_input("Email", value=form_email)
+        # Force-load form fields from the appropriate source (runs once per trigger)
+        if st.session_state.pop('cf_apply_fresh', False):
+            _a = st.session_state.get('client_apply', {})
+            st.session_state['cf_name']    = _a.get('name', '')
+            st.session_state['cf_address'] = _a.get('address', '')
+            st.session_state['cf_contact'] = ''
+            st.session_state['cf_email']   = _a.get('email', '')
+            st.session_state['cf_website'] = _a.get('website', '')
+            st.session_state['cf_abn']     = _a.get('abn', '')
+        elif st.session_state.pop('cf_edit_fresh', False):
+            st.session_state['cf_name']    = form_name
+            st.session_state['cf_address'] = form_address
+            st.session_state['cf_contact'] = form_contact_name
+            st.session_state['cf_email']   = form_email
+            st.session_state['cf_website'] = form_website
+        elif st.session_state.pop('cf_reset_fresh', False):
+            st.session_state['cf_name']    = ''
+            st.session_state['cf_address'] = ''
+            st.session_state['cf_contact'] = ''
+            st.session_state['cf_email']   = ''
+            st.session_state['cf_website'] = ''
+
+        # ── ABR Lookup ──
+        _abr_guid = get_setting('abr_guid', '')
+        if not _abr_guid:
+            st.info("Add your free ABR GUID in **Settings** to enable business name lookup.")
+        else:
+            srch_col, btn_col = st.columns([3, 1], vertical_alignment="bottom")
+            abr_query = srch_col.text_input("Search business name or ABN", key="abr_query",
+                                            placeholder="e.g. COSOL or 12 345 678 901")
+            if btn_col.button("Search ABR", key="abr_search_btn", use_container_width=True):
+                if abr_query.strip():
+                    with st.spinner("Searching…"):
+                        try:
+                            results = abr_search(abr_query.strip(), _abr_guid)
+                            st.session_state['abr_results'] = results
+                            if not results:
+                                st.warning("No active businesses found.")
+                        except Exception as _e:
+                            st.error(f"ABR error: {_e}")
+                    st.rerun()
+                else:
+                    st.warning("Enter a business name or ABN.")
+
+            abr_results = st.session_state.get('abr_results')
+            if abr_results is not None:
+                if abr_results:
+                    st.markdown("**Select a business:**")
+                    for i, r in enumerate(abr_results):
+                        rc1, rc2, rc3 = st.columns([3, 1, 1])
+                        rc1.write(f"**{r['name']}**")
+                        rc2.caption(f"ABN {r['abn']}")
+                        rc3.caption(f"{r['state']} {r['postcode']}")
+                        if st.button("Select", key=f"abr_sel_{i}", use_container_width=True):
+                            with st.spinner("Fetching details…"):
+                                detail = abr_get_detail(r['abn'], _abr_guid)
+                            apply = {
+                                'name': detail.get('name') or r['name'],
+                                'address': detail.get('address') or '',
+                                'email': '',
+                                'website': '',
+                                'abn': r['abn'],
+                            }
+                            st.session_state['client_apply'] = apply
+                            st.session_state['cf_apply_fresh'] = True
+                            st.session_state.pop('abr_results', None)
+                            st.rerun()
+                else:
+                    st.caption("No results.")
+            st.divider()
+
+        c_name    = st.text_input("Company name", key="cf_name")
+        c_address = st.text_area("Address",       key="cf_address", height=80)
+        c_contact = st.text_input("Contact name", key="cf_contact")
+        c_email   = st.text_input("Email",        key="cf_email")
+        c_website = st.text_input("Website",      key="cf_website")
+        with st.expander("Billing (advanced)"):
             c_billing = st.radio(
                 "Billing type", ['hourly', 'day_rate'],
                 format_func=lambda x: 'Hourly' if x == 'hourly' else 'Day Rate',
@@ -1365,22 +1636,31 @@ if page == 'clients':
             )
             c_day_rate = st.number_input(
                 "Day rate ($)", min_value=0.0, step=50.0, value=form_day_rate,
-                help="Used when billing type is Day Rate"
+                help="Used when billing type is Day Rate",
             )
-            save_btn  = st.form_submit_button("Save Client", type="primary", use_container_width=True)
-
+        save_btn = st.button("Save Client", type="primary", use_container_width=True)
         if save_btn:
-            if not c_name:
+            if not st.session_state.get('cf_name', '').strip():
                 st.error("Company name is required.")
             else:
-                save_client(editing, c_name.strip(), c_address.strip(), c_contact.strip(), c_email.strip(),
-                            c_billing, c_day_rate)
+                save_client(editing,
+                            st.session_state.get('cf_name', '').strip(),
+                            st.session_state.get('cf_address', '').strip(),
+                            st.session_state.get('cf_contact', '').strip(),
+                            st.session_state.get('cf_email', '').strip(),
+                            c_billing, c_day_rate,
+                            st.session_state.get('cf_website', '').strip())
                 st.session_state.pop('editing_client', None)
-                st.success(f"{'Updated' if editing else 'Saved'}: {c_name}")
+                st.session_state.pop('client_lookup', None)
+                st.session_state.pop('client_apply', None)
+                st.session_state['cf_reset_fresh'] = True
+                st.success(f"{'Updated' if editing else 'Saved'}: {st.session_state.get('cf_name','')}")
                 st.rerun()
 
-        if editing and st.button("Cancel edit"):
+        if editing and st.button("Cancel edit", key="cf_cancel"):
             st.session_state.pop('editing_client', None)
+            st.session_state.pop('client_apply', None)
+            st.session_state['cf_reset_fresh'] = True
             st.rerun()
 
     with col_list:
@@ -1395,6 +1675,8 @@ if page == 'clients':
                     c1.caption(row['contact_name'])
                 if c2.button("Edit", key=f"edit_{row['id']}"):
                     st.session_state['editing_client'] = row['id']
+                    st.session_state.pop('client_apply', None)
+                    st.session_state['cf_edit_fresh'] = True
                     st.rerun()
                 if c3.button("Delete", key=f"del_{row['id']}"):
                     delete_client(row['id'])
@@ -1545,6 +1827,15 @@ if page == 'settings':
         )
 
         st.divider()
+        st.markdown("**ABR Business Lookup**")
+        abr_guid = st.text_input(
+            "ABR GUID",
+            value=get_setting('abr_guid', ''),
+            help="Free GUID from abr.business.gov.au/Tools/WebServices — enables business name search on the Clients page",
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        )
+
+        st.divider()
         st.markdown("**Invoice numbering**")
         _fmt = get_setting('inv_format', 'date') or 'date'
         inv_format = st.radio(
@@ -1576,12 +1867,50 @@ if page == 'settings':
             ('payment_terms', payment_terms),
             ('inv_format', inv_format), ('inv_prefix', inv_prefix),
             ('inv_next_num', str(int(inv_next_num))),
+            ('abr_guid', abr_guid),
         ]:
             save_setting(key, val)
         st.success("Settings saved.")
 
     st.divider()
     st.caption(f"Next invoice number will be: **{get_next_invoice_number()}**")
+
+    st.divider()
+    st.markdown("**Danger Zone**")
+    with st.expander("Clear data"):
+        st.warning("This permanently deletes data. It cannot be undone.")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            if st.button("Delete all time entries", use_container_width=True):
+                st.session_state['confirm_clear'] = 'entries'
+                st.rerun()
+        with col_b:
+            if st.button("Delete all invoices", use_container_width=True):
+                st.session_state['confirm_clear'] = 'invoices'
+                st.rerun()
+        with col_c:
+            if st.button("Delete everything", type="primary", use_container_width=True):
+                st.session_state['confirm_clear'] = 'all'
+                st.rerun()
+
+        confirm = st.session_state.get('confirm_clear')
+        if confirm:
+            labels = {'entries': 'all time entries', 'invoices': 'all invoices', 'all': 'all time entries AND invoices'}
+            st.error(f"Are you sure you want to delete {labels[confirm]}?")
+            yes, no = st.columns(2)
+            if yes.button("Yes, delete", type="primary", use_container_width=True):
+                con = duckdb.connect(DB_PATH)
+                if confirm in ('entries', 'all'):
+                    con.execute("DELETE FROM entries")
+                if confirm in ('invoices', 'all'):
+                    con.execute("DELETE FROM invoices")
+                con.close()
+                st.session_state.pop('confirm_clear', None)
+                st.success("Done.")
+                st.rerun()
+            if no.button("Cancel", use_container_width=True):
+                st.session_state.pop('confirm_clear', None)
+                st.rerun()
 
 # ── Statements ────────────────────────────────────────────────────────────────
 
