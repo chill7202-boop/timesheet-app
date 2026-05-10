@@ -804,6 +804,19 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
 
 init_db()
 
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.title("Kingsleyhill Timesheet")
+    pwd = st.text_input("Password", type="password")
+    if st.button("Sign in"):
+        if pwd == st.secrets.get("APP_PASSWORD", "").strip():
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password")
+    st.stop()
 
 st.markdown("""<style>
 .stAppDeployButton { display: none !important; }
