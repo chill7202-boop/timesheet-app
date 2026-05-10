@@ -929,7 +929,7 @@ if page == 'log':
             with st.form("log_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
                 with col1:
-                    entry_date   = st.date_input("Date", value=date.today())
+                    entry_date   = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
                     # Get client_id for selected client, then filter projects
                     _cl_row  = saved_clients[saved_clients['name'] == selected_client]
                     _cl_id   = _cl_row.iloc[0]['id'] if not _cl_row.empty else None
@@ -990,9 +990,9 @@ if page == 'timesheet':
     with col3:
         filter_employee = st.selectbox("Employee", emp_list, key='ts_employee')
     with col4:
-        from_date = st.date_input("From", value=None, key='ts_from')
+        from_date = st.date_input("From", value=None, key='ts_from', format="DD/MM/YYYY")
     with col5:
-        to_date = st.date_input("To", value=None, key='ts_to')
+        to_date = st.date_input("To", value=None, key='ts_to', format="DD/MM/YYYY")
 
     show_invoiced = st.checkbox("Show invoiced entries", value=False, key='ts_show_invoiced')
 
@@ -1260,8 +1260,8 @@ if page == 'invoice':
                 use_date_range = st.checkbox("Filter by date range", value=False)
                 if use_date_range:
                     dc1, dc2 = st.columns(2)
-                    inv_from = dc1.date_input("From date", key='inv_from')
-                    inv_to   = dc2.date_input("To date", value=date.today(), key='inv_to')
+                    inv_from = dc1.date_input("From date", key='inv_from', format="DD/MM/YYYY")
+                    inv_to   = dc2.date_input("To date", value=date.today(), key='inv_to', format="DD/MM/YYYY")
                 else:
                     inv_from = inv_to = None
 
@@ -2000,8 +2000,8 @@ if page == 'statements':
         months = sorted(inv_df['invoice_date'].dt.to_period('M').astype(str).unique(), reverse=True)
         filter_month = fb.selectbox("Month", ['All'] + months, key='stmt_month')
 
-        filter_from = fc.date_input("From date", value=None, key='stmt_from')
-        filter_to   = fd.date_input("To date",   value=None, key='stmt_to')
+        filter_from = fc.date_input("From date", value=None, key='stmt_from', format="DD/MM/YYYY")
+        filter_to   = fd.date_input("To date",   value=None, key='stmt_to', format="DD/MM/YYYY")
 
         inv_search = st.text_input("Search invoice number", placeholder="e.g. INV-002", key='stmt_search')
 
