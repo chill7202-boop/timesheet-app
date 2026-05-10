@@ -1019,26 +1019,33 @@ if page == 'log':
         if selected_client:
             st.markdown(f"**Client:** {selected_client}")
 
-            # Employee selector outside form so rate updates immediately on change
+            # Employee and rate outside form so they react immediately
             emp_df      = get_employees()
             emp_options = ['Self'] + emp_df['name'].tolist() if not emp_df.empty else ['Self']
-            employee    = st.selectbox("Employee", emp_options, key="log_employee")
+            ec1, ec2    = st.columns(2)
+            employee    = ec1.selectbox("Employee", emp_options, key="log_employee")
 
-            # Determine rate default based on selected employee
             rate_default = float(get_setting('default_rate', '0') or 0)
             if employee != 'Self' and not emp_df.empty:
                 emp_row = emp_df[emp_df['name'] == employee]
                 if not emp_row.empty and float(emp_row.iloc[0]['rate'] or 0) > 0:
                     rate_default = float(emp_row.iloc[0]['rate'])
 
+            # Force rate to update when employee changes by writing to session_state first
+            if st.session_state.get('_log_employee_prev') != employee:
+                st.session_state['log_rate_input'] = rate_default
+                st.session_state['_log_employee_prev'] = employee
+
+            rate = ec2.number_input("Hourly rate ($)", min_value=0.0, step=5.0,
+                                    value=rate_default, key="log_rate_input")
+
             with st.form("log_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
                 with col1:
-                    entry_date   = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
-                    # Get client_id for selected client, then filter projects
-                    _cl_row  = saved_clients[saved_clients['name'] == selected_client]
-                    _cl_id   = _cl_row.iloc[0]['id'] if not _cl_row.empty else None
-                    proj_df  = get_projects_list(client_id=_cl_id) if _cl_id else get_projects_list()
+                    entry_date = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
+                    _cl_row    = saved_clients[saved_clients['name'] == selected_client]
+                    _cl_id     = _cl_row.iloc[0]['id'] if not _cl_row.empty else None
+                    proj_df    = get_projects_list(client_id=_cl_id) if _cl_id else get_projects_list()
                     if proj_df.empty:
                         st.warning("No projects for this client — add them in the **Projects** page.")
                         project = None
@@ -1046,16 +1053,17 @@ if page == 'log':
                         proj_options = [f"{r['code']} — {r['name']}" if r['code'] else r['name']
                                         for _, r in proj_df.iterrows()]
                         proj_sel = st.selectbox("Project", proj_options)
-                        idx = proj_options.index(proj_sel)
-                        project = proj_df.iloc[idx]['name']
+                        idx      = proj_options.index(proj_sel)
+                        project  = proj_df.iloc[idx]['name']
                 with col2:
                     hours = st.number_input("Hours", min_value=0.25, max_value=24.0, step=0.25, value=1.0)
-                    rate  = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=rate_default, key=f"rate_{employee}")
 
                 description = st.text_area("Description", placeholder="What did you work on?")
                 submitted   = st.form_submit_button("Save Entry", type="primary", use_container_width=True)
 
             if submitted:
+                # Read rate from session state (outside-form widget)
+                rate_used = st.session_state.get("log_rate_input", rate_default)
                 if not project:
                     st.error("Set up projects in the Projects page before logging time.")
                 elif not description:
@@ -1063,7 +1071,7 @@ if page == 'log':
                 elif hours <= 0:
                     st.error("Hours must be greater than 0.")
                 else:
-                    add_entry(entry_date, selected_client, project.strip(), description.strip(), hours, rate, employee)
+                    add_entry(entry_date, selected_client, project.strip(), description.strip(), hours, rate_used, employee)
                     st.success(f"Saved {hours:.2f}h on {project} for {selected_client} — {employee}")
 
 # ── Timesheet ─────────────────────────────────────────────────────────────────
