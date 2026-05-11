@@ -87,6 +87,7 @@ def init_db():
         "ALTER TABLE clients ADD COLUMN website VARCHAR",
         "ALTER TABLE clients ADD COLUMN abn VARCHAR",
         "ALTER TABLE projects ADD COLUMN client_id VARCHAR",
+        "ALTER TABLE clients ADD COLUMN billable BOOLEAN DEFAULT TRUE",
     ]:
         try:
             con.execute(col)
@@ -139,18 +140,18 @@ def get_clients_list():
     return df.copy()
 
 
-def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0, website=''):
+def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0, website='', billable=True):
     st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     if client_id:
         con.execute(
-            "UPDATE clients SET name=?, address=?, contact_name=?, email=?, billing_type=?, day_rate=?, website=? WHERE id=?",
-            [name, address, contact_name, email, billing_type, day_rate, website, client_id]
+            "UPDATE clients SET name=?, address=?, contact_name=?, email=?, billing_type=?, day_rate=?, website=?, billable=? WHERE id=?",
+            [name, address, contact_name, email, billing_type, day_rate, website, billable, client_id]
         )
     else:
         con.execute(
-            "INSERT INTO clients (id,name,address,contact_name,email,billing_type,day_rate,website) VALUES (?,?,?,?,?,?,?,?)",
-            [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate, website]
+            "INSERT INTO clients (id,name,address,contact_name,email,billing_type,day_rate,website,billable) VALUES (?,?,?,?,?,?,?,?,?)",
+            [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate, website, billable]
         )
     con.close()
 
@@ -1301,6 +1302,10 @@ if page == 'invoice':
         # ── Ready to invoice summary ──
         all_approved = load_entries(status='approved')
         if not all_approved.empty:
+            # Exclude internal (non-billable) clients from ready-to-invoice summary
+            if 'billable' in client_records.columns:
+                internal_names = client_records[client_records['billable'] == False]['name'].tolist()
+                all_approved = all_approved[~all_approved['client'].isin(internal_names)]
             all_approved['amount'] = all_approved['hours'].astype(float) * all_approved['rate'].astype(float)
             pending_clients = (
                 all_approved.groupby('client')
@@ -1319,7 +1324,9 @@ if page == 'invoice':
                         st.rerun()
             st.divider()
 
-        client_names = client_records['name'].tolist()
+        # Only show billable clients in invoice page
+        billable_records = client_records[client_records.get('billable', True) != False] if 'billable' in client_records.columns else client_records
+        client_names = billable_records['name'].tolist()
 
         # Pre-select client if arriving from Timesheet page
         _preset = st.session_state.pop('inv_preset_client', None)
@@ -1700,10 +1707,12 @@ if page == 'clients':
                 _bt               = row.get('billing_type', 'hourly')
                 form_billing_type = _bt if _bt in ('hourly', 'day_rate') else 'hourly'
                 form_day_rate     = float(row.get('day_rate', 0) or 0)
+                form_billable     = bool(row.get('billable', True))
         if not editing:
             form_name = form_address = form_contact_name = form_email = form_website = ''
             form_billing_type = 'hourly'
             form_day_rate     = 0.0
+            form_billable     = True
         else:
             form_website = row.get('website', '') or ''
 
@@ -1783,6 +1792,8 @@ if page == 'clients':
         c_contact = st.text_input("Contact name", key="cf_contact")
         c_email   = st.text_input("Email",        key="cf_email")
         c_website = st.text_input("Website",      key="cf_website")
+        c_billable = st.checkbox("Billable client", value=form_billable,
+                                 help="Uncheck for internal clients — time is tracked but excluded from invoices")
         with st.expander("Billing (advanced)"):
             c_billing = st.radio(
                 "Billing type", ['hourly', 'day_rate'],
@@ -1805,7 +1816,8 @@ if page == 'clients':
                             st.session_state.get('cf_contact', '').strip(),
                             st.session_state.get('cf_email', '').strip(),
                             c_billing, c_day_rate,
-                            st.session_state.get('cf_website', '').strip())
+                            st.session_state.get('cf_website', '').strip(),
+                            c_billable)
                 st.session_state.pop('editing_client', None)
                 st.session_state.pop('client_lookup', None)
                 st.session_state.pop('client_apply', None)
@@ -1827,7 +1839,8 @@ if page == 'clients':
             st.markdown('<div class="client-list">', unsafe_allow_html=True)
             for _, row in client_records.iterrows():
                 c1, c2, c3 = st.columns([3, 1, 1], vertical_alignment="center")
-                label = f"**{row['name']}**"
+                is_billable = bool(row.get('billable', True))
+                label = f"**{row['name']}**" + ("" if is_billable else " `Internal`")
                 if row['contact_name']:
                     label += f"  \n<small>{row['contact_name']}</small>"
                 c1.markdown(label, unsafe_allow_html=True)
@@ -2235,19 +2248,31 @@ if page == 'dashboard':
     total_invoiced, paid, outstanding = float(revenue[0]), float(revenue[1]), float(revenue[2])
     month_label = date.today().strftime('%B %Y')
 
+    # Split hours into billable vs internal
+    all_clients_df = get_clients_list()
+    internal_names = []
+    if 'billable' in all_clients_df.columns:
+        internal_names = all_clients_df[all_clients_df['billable'] == False]['name'].tolist()
+    billable_hours_df = hours_df[~hours_df['client'].isin(internal_names)] if not hours_df.empty else hours_df
+    internal_hours_df = hours_df[hours_df['client'].isin(internal_names)] if not hours_df.empty else pd.DataFrame()
+
     # ── This month ──
     st.markdown(f"#### {month_label}")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Invoiced",    f"${total_invoiced:,.0f}")
-    m2.metric("Paid",        f"${paid:,.0f}")
-    m3.metric("Outstanding", f"${outstanding:,.0f}")
-    m4.metric("Hours Logged", f"{hours_df['hours'].sum():.1f}h" if not hours_df.empty else "0h")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Invoiced",       f"${total_invoiced:,.0f}")
+    m2.metric("Paid",           f"${paid:,.0f}")
+    m3.metric("Outstanding",    f"${outstanding:,.0f}")
+    m4.metric("Billable Hours", f"{billable_hours_df['hours'].sum():.1f}h" if not billable_hours_df.empty else "0h")
+    m5.metric("Internal Hours", f"{internal_hours_df['hours'].sum():.1f}h" if not internal_hours_df.empty else "0h")
 
     # ── Hours by client this month ──
-    if not hours_df.empty:
+    if not billable_hours_df.empty:
         st.divider()
-        st.markdown("#### Hours by Client — This Month")
-        st.bar_chart(hours_df.set_index('client')['hours'])
+        st.markdown("#### Billable Hours by Client — This Month")
+        st.bar_chart(billable_hours_df.set_index('client')['hours'])
+    if not internal_hours_df.empty:
+        st.markdown("#### Internal Hours by Client — This Month")
+        st.bar_chart(internal_hours_df.set_index('client')['hours'])
 
     # ── Unpaid invoices ──
     st.divider()
