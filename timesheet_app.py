@@ -896,6 +896,9 @@ if not st.session_state.authenticated:
 st.markdown("""<style>
 .stAppDeployButton { display: none !important; }
 [data-testid="stAppDeployButton"] { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stHeader"] a { display: none !important; }
+#MainMenu { display: none !important; }
 
 /* ── Compact client list ── */
 div.client-list [data-testid="stHorizontalBlock"] {
