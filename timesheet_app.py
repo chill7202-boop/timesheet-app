@@ -2266,13 +2266,26 @@ if page == 'dashboard':
     m5.metric("Internal Hours", f"{internal_hours_df['hours'].sum():.1f}h" if not internal_hours_df.empty else "0h")
 
     # ── Hours by client this month ──
+    import altair as alt
     if not billable_hours_df.empty:
         st.divider()
         st.markdown("#### Billable Hours by Client — This Month")
-        st.bar_chart(billable_hours_df.set_index('client')['hours'])
+        chart = alt.Chart(billable_hours_df).mark_bar().encode(
+            x=alt.X('client:N', sort='-y', title=None),
+            y=alt.Y('hours:Q', title='Hours'),
+            color=alt.Color('client:N', legend=None),
+            tooltip=['client', 'hours']
+        ).properties(height=300)
+        st.altair_chart(chart, use_container_width=True)
+
     if not internal_hours_df.empty:
         st.markdown("#### Internal Hours by Client — This Month")
-        st.bar_chart(internal_hours_df.set_index('client')['hours'])
+        chart = alt.Chart(internal_hours_df).mark_bar(color='#9E9E9E').encode(
+            x=alt.X('client:N', sort='-y', title=None),
+            y=alt.Y('hours:Q', title='Hours'),
+            tooltip=['client', 'hours']
+        ).properties(height=300)
+        st.altair_chart(chart, use_container_width=True)
 
     # ── Unpaid invoices ──
     st.divider()
@@ -2292,4 +2305,10 @@ if page == 'dashboard':
     if not top_clients_df.empty:
         st.divider()
         st.markdown("#### Top Clients — Last 3 Months")
-        st.bar_chart(top_clients_df.set_index('client')['revenue'])
+        chart = alt.Chart(top_clients_df).mark_bar().encode(
+            x=alt.X('client:N', sort='-y', title=None),
+            y=alt.Y('revenue:Q', title='Revenue ($)'),
+            color=alt.Color('client:N', legend=None),
+            tooltip=['client', 'revenue']
+        ).properties(height=300)
+        st.altair_chart(chart, use_container_width=True)
