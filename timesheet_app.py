@@ -939,14 +939,6 @@ def back_button():
         st.session_state['page'] = 'home'
         st.rerun()
 
-# Logout button — top-right on every page
-_lcol1, _lcol2 = st.columns([8, 1])
-with _lcol2:
-    if st.button("Log out", key="logout_btn"):
-        st.session_state.authenticated = False
-        st.session_state['page'] = 'home'
-        st.rerun()
-
 page = st.session_state['page']
 
 # ── Home ─────────────────────────────────────────────────────────────────────
@@ -995,6 +987,7 @@ if page == 'home':
         ("👤", "Employees",  'employees',  False),
         ("📄", "Statements", 'statements', False),
         ("⚙️", "Settings",  'settings',   False),
+        ("🔒", "Log Out",    'logout',     False),
     ]
 
     cols = st.columns(len(tiles))
@@ -1002,7 +995,12 @@ if page == 'home':
         with col:
             if st.button(icon, key=f"nav_{dest}", help=label,
                          type="primary" if primary else "secondary"):
-                go(dest); st.rerun()
+                if dest == 'logout':
+                    st.session_state.authenticated = False
+                    st.session_state['page'] = 'home'
+                    st.rerun()
+                else:
+                    go(dest); st.rerun()
 
 # ── Log Time ─────────────────────────────────────────────────────────────────
 
