@@ -869,6 +869,15 @@ init_db()
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
+# Auto-timeout after 8 hours of inactivity
+SESSION_TIMEOUT = 8 * 3600
+if st.session_state.authenticated:
+    last = st.session_state.get('last_activity', datetime.now().timestamp())
+    if datetime.now().timestamp() - last > SESSION_TIMEOUT:
+        st.session_state.authenticated = False
+        st.session_state['last_activity'] = None
+st.session_state['last_activity'] = datetime.now().timestamp()
+
 if not st.session_state.authenticated:
     st.title("KingsleyHill System")
     pwd = st.text_input("Password", type="password")
@@ -927,6 +936,14 @@ def go(page):
 
 def back_button():
     if st.button("← Back", key="back"):
+        st.session_state['page'] = 'home'
+        st.rerun()
+
+# Logout button — top-right on every page
+_lcol1, _lcol2 = st.columns([8, 1])
+with _lcol2:
+    if st.button("Log out", key="logout_btn"):
+        st.session_state.authenticated = False
         st.session_state['page'] = 'home'
         st.rerun()
 
