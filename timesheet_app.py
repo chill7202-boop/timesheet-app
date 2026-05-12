@@ -1252,6 +1252,26 @@ if page == 'timesheet':
             app_display['Date'] = pd.to_datetime(app_display['Date']).dt.strftime('%d/%m/%Y')
             st.dataframe(app_display, use_container_width=True, hide_index=True)
 
+            with st.expander("Unapprove entries"):
+                ua_options = approved_df['id'].tolist()
+                ua_selected = st.multiselect(
+                    "Select entries to unapprove",
+                    ua_options,
+                    format_func=lambda i: approved_df[approved_df['id'] == i].apply(
+                        lambda r: f"{pd.to_datetime(r['entry_date']).strftime('%d/%m/%Y')} | {r['client']} | {r['project']} | {r['hours']}h", axis=1
+                    ).values[0],
+                    key="unapprove_select"
+                )
+                uc1, uc2 = st.columns(2)
+                if uc1.button("Unapprove Selected", key="unapprove_sel_btn", disabled=not ua_selected):
+                    set_status_bulk(ua_selected, 'submitted')
+                    st.success(f"Moved {len(ua_selected)} {'entry' if len(ua_selected)==1 else 'entries'} back to submitted.")
+                    st.rerun()
+                if uc2.button("Unapprove All", key="unapprove_all_btn"):
+                    set_status_bulk(approved_df['id'].tolist(), 'submitted')
+                    st.success("All approved entries moved back to submitted.")
+                    st.rerun()
+
         # ── Invoiced ──
         if not invoiced_df.empty:
             if show_invoiced:
