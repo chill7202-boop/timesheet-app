@@ -1379,12 +1379,6 @@ if page == 'invoice':
             billing_label = 'Hourly' if client_billing_type != 'day_rate' else f'Day Rate (${client_day_rate:.2f}/day)'
             st.markdown(f"**Client:** {inv_client} &nbsp;·&nbsp; Default billing: **{billing_label}**")
 
-            # Warn if there are submitted (unapproved) entries for this client
-            _submitted = load_entries(client=inv_client, status='submitted')
-            if not _submitted.empty:
-                _hrs = _submitted['hours'].astype(float).sum()
-                st.warning(f"⚠️ {len(_submitted)} submitted {'entry' if len(_submitted)==1 else 'entries'} ({_hrs:.2f}h) not yet approved for {inv_client} — approve them in the Timesheet page before invoicing.")
-
             inv_mode = st.radio(
                 "Invoice type",
                 ['timesheet', 'fixed'],
@@ -1406,6 +1400,12 @@ if page == 'invoice':
                 include_gst    = st.checkbox("Include GST (10%)", value=True)
 
             if inv_mode == 'timesheet':
+                # Warn about unapproved entries
+                _unapproved = load_entries(client=inv_client, status=['open', 'submitted'])
+                if not _unapproved.empty:
+                    _hrs = _unapproved['hours'].astype(float).sum()
+                    st.warning(f"⚠️ {len(_unapproved)} unapproved {'entry' if len(_unapproved)==1 else 'entries'} ({_hrs:.2f}h) not yet approved for {inv_client} — approve them in the Timesheet page before invoicing.")
+
                 with col1:
                     inv_project = st.selectbox(
                         "Filter by project",
@@ -1617,12 +1617,23 @@ if page == 'invoice':
                             go('statements')
                             st.rerun()
                     else:
+                        _approved_entries = load_entries(client=inv_data['client'], status='approved')
+                        if not _approved_entries.empty:
+                            _ap_hrs = _approved_entries['hours'].astype(float).sum()
+                            mark_approved = st.checkbox(
+                                f"Also mark {len(_approved_entries)} approved timesheet {'entry' if len(_approved_entries)==1 else 'entries'} ({_ap_hrs:.2f}h) as invoiced",
+                                value=False, key="fp_mark_approved"
+                            )
+                        else:
+                            mark_approved = False
                         if st.button("✓ Record Invoice Sent", use_container_width=True, key="mark_fp_done"):
                             save_invoice(inv_data['inv_number'], inv_data['client'],
                                          inv_data.get('subtotal', inv_data['total']),
                                          inv_data.get('gst', 0), inv_data['total'],
                                          'fixed', 'fixed')
                             increment_invoice_number()
+                            if mark_approved and not _approved_entries.empty:
+                                set_status_bulk(_approved_entries['id'].tolist(), 'invoiced')
                             st.session_state.pop('generated_invoice', None)
                             st.session_state.pop('adhoc_lines', None)
                             go('statements')
