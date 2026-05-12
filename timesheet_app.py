@@ -1379,6 +1379,12 @@ if page == 'invoice':
             billing_label = 'Hourly' if client_billing_type != 'day_rate' else f'Day Rate (${client_day_rate:.2f}/day)'
             st.markdown(f"**Client:** {inv_client} &nbsp;·&nbsp; Default billing: **{billing_label}**")
 
+            # Warn if there are submitted (unapproved) entries for this client
+            _submitted = load_entries(client=inv_client, status='submitted')
+            if not _submitted.empty:
+                _hrs = _submitted['hours'].astype(float).sum()
+                st.warning(f"⚠️ {len(_submitted)} submitted {'entry' if len(_submitted)==1 else 'entries'} ({_hrs:.2f}h) not yet approved for {inv_client} — approve them in the Timesheet page before invoicing.")
+
             inv_mode = st.radio(
                 "Invoice type",
                 ['timesheet', 'fixed'],
