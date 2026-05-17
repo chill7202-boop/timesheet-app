@@ -78,6 +78,16 @@ def init_db():
             paid_date     DATE
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS adhoc_draft_lines (
+            id          VARCHAR PRIMARY KEY,
+            client      VARCHAR,
+            description VARCHAR,
+            qty         DECIMAL(8,2),
+            unit_price  DECIMAL(10,2),
+            sort_order  INTEGER DEFAULT 0
+        )
+    """)
     # Migrations
     for col in [
         "ALTER TABLE entries ADD COLUMN employee VARCHAR DEFAULT 'Self'",
@@ -303,6 +313,47 @@ def invoice_number_exists(inv_number):
     row = con.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number = ?", [inv_number]).fetchone()
     con.close()
     return row[0] > 0
+
+
+# ── Ad hoc draft line helpers ──────────────────────────────────────────────────
+
+def load_adhoc_lines(client):
+    con = duckdb.connect(DB_PATH)
+    rows = con.execute(
+        "SELECT id, description, qty, unit_price FROM adhoc_draft_lines WHERE client=? ORDER BY sort_order, rowid",
+        [client]
+    ).fetchall()
+    con.close()
+    return [{'id': r[0], 'description': r[1], 'qty': float(r[2]), 'unit_price': float(r[3])} for r in rows]
+
+def add_adhoc_line(client, description, qty, unit_price):
+    con = duckdb.connect(DB_PATH)
+    max_order = con.execute(
+        "SELECT COALESCE(MAX(sort_order),0) FROM adhoc_draft_lines WHERE client=?", [client]
+    ).fetchone()[0]
+    con.execute(
+        "INSERT INTO adhoc_draft_lines (id, client, description, qty, unit_price, sort_order) VALUES (?,?,?,?,?,?)",
+        [str(uuid.uuid4()), client, description, qty, unit_price, max_order + 1]
+    )
+    con.close()
+
+def update_adhoc_line(line_id, description, qty, unit_price):
+    con = duckdb.connect(DB_PATH)
+    con.execute(
+        "UPDATE adhoc_draft_lines SET description=?, qty=?, unit_price=? WHERE id=?",
+        [description, qty, unit_price, line_id]
+    )
+    con.close()
+
+def delete_adhoc_line(line_id):
+    con = duckdb.connect(DB_PATH)
+    con.execute("DELETE FROM adhoc_draft_lines WHERE id=?", [line_id])
+    con.close()
+
+def clear_adhoc_lines(client):
+    con = duckdb.connect(DB_PATH)
+    con.execute("DELETE FROM adhoc_draft_lines WHERE client=?", [client])
+    con.close()
 
 
 @st.cache_data(ttl=60)
@@ -1494,11 +1545,10 @@ if page == 'invoice':
                 with col1:
                     inv_number = st.text_input("Invoice number", value=get_next_invoice_number(), key='inv_num_fp')
 
-                if 'adhoc_lines' not in st.session_state:
-                    st.session_state['adhoc_lines'] = []
+                fp_lines = load_adhoc_lines(inv_client)
 
                 # ── Saved lines list ──
-                if st.session_state['adhoc_lines']:
+                if fp_lines:
                     lines_df = pd.DataFrame([
                         {
                             'Description':  l['description'],
@@ -1506,7 +1556,7 @@ if page == 'invoice':
                             'Unit Price ($)': float(l['unit_price']),
                             'Amount ($)':   float(l['qty']) * float(l['unit_price']),
                         }
-                        for l in st.session_state['adhoc_lines']
+                        for l in fp_lines
                     ])
                     st.dataframe(lines_df, use_container_width=True, hide_index=True,
                                  column_config={
@@ -1515,18 +1565,38 @@ if page == 'invoice':
                                      'Amount ($)':     st.column_config.NumberColumn(format='$%.2f'),
                                  })
 
-                    fp_subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in st.session_state['adhoc_lines'])
+                    fp_subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in fp_lines)
                     fp_gst      = fp_subtotal * 0.1 if include_gst else 0
                     st.caption(f"Subtotal: ${fp_subtotal:,.2f}  ·  GST: ${fp_gst:,.2f}  ·  **Total: ${fp_subtotal + fp_gst:,.2f}**")
 
-                    with st.expander("Remove a line"):
+                    with st.expander("✏️ Edit a line"):
+                        ed_idx = st.selectbox(
+                            "Select line to edit",
+                            range(len(fp_lines)),
+                            format_func=lambda i: f"{i+1}. {fp_lines[i]['description']}",
+                            key='edit_line_sel',
+                        )
+                        ed_line = fp_lines[ed_idx]
+                        ed_desc  = st.text_input("Description", value=ed_line['description'], key=f'ed_desc_{ed_line["id"]}')
+                        ec1, ec2 = st.columns(2)
+                        ed_qty   = ec1.number_input("Quantity", min_value=0.0, step=1.0, value=float(ed_line['qty']), key=f'ed_qty_{ed_line["id"]}')
+                        ed_price = ec2.number_input("Unit price ($)", min_value=0.0, step=100.0, value=float(ed_line['unit_price']), key=f'ed_price_{ed_line["id"]}')
+                        if st.button("Save changes", key="save_edit_line", type="primary"):
+                            if not ed_desc.strip():
+                                st.error("Description is required.")
+                            else:
+                                update_adhoc_line(ed_line['id'], ed_desc.strip(), ed_qty, ed_price)
+                                st.session_state.pop('generated_invoice', None)
+                                st.rerun()
+
+                    with st.expander("🗑️ Remove a line"):
                         rm_idx = st.selectbox(
                             "Select line to remove",
-                            range(len(st.session_state['adhoc_lines'])),
-                            format_func=lambda i: f"{i+1}. {st.session_state['adhoc_lines'][i]['description']}",
+                            range(len(fp_lines)),
+                            format_func=lambda i: f"{i+1}. {fp_lines[i]['description']}",
                         )
                         if st.button("Remove line", key="rm_line"):
-                            st.session_state['adhoc_lines'].pop(rm_idx)
+                            delete_adhoc_line(fp_lines[rm_idx]['id'])
                             st.session_state.pop('generated_invoice', None)
                             st.rerun()
 
@@ -1545,15 +1615,10 @@ if page == 'invoice':
                     if not new_desc.strip():
                         st.error("Description is required.")
                     else:
-                        st.session_state['adhoc_lines'].append({
-                            'description': new_desc.strip(),
-                            'qty':         new_qty,
-                            'unit_price':  new_price,
-                        })
+                        add_adhoc_line(inv_client, new_desc.strip(), new_qty, new_price)
                         st.session_state.pop('generated_invoice', None)
                         st.rerun()
 
-                fp_lines = st.session_state['adhoc_lines']
                 if fp_lines:
                     already_used_fp = invoice_number_exists(inv_number)
                     if already_used_fp:
@@ -1585,7 +1650,7 @@ if page == 'invoice':
                             'is_timesheet': False, 'billing_type': 'fixed',
                         }
                     if clrcol.button("Clear all lines", key="clear_fp", use_container_width=True):
-                        st.session_state['adhoc_lines'] = []
+                        clear_adhoc_lines(inv_client)
                         st.session_state.pop('generated_invoice', None)
                         st.rerun()
 
@@ -1635,7 +1700,7 @@ if page == 'invoice':
                             if mark_approved and not _approved_entries.empty:
                                 set_status_bulk(_approved_entries['id'].tolist(), 'invoiced')
                             st.session_state.pop('generated_invoice', None)
-                            st.session_state.pop('adhoc_lines', None)
+                            clear_adhoc_lines(inv_data['client'])
                             go('statements')
                             st.rerun()
 
