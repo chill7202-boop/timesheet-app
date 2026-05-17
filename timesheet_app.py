@@ -508,7 +508,7 @@ def abr_get_detail(abn, guid):
     except Exception:
         return {}
 
-def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None, due_date=None):
+def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None, due_date=None, period_end=None):
     my_name    = settings.get('name', '')
     my_company = settings.get('company', '')
     my_address = settings.get('address', '')
@@ -522,6 +522,8 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
         days_in_month = [31,28,29,30,31,30,31,31,30,31,30,31][date.today().month - 1]
         due_date = date(date.today().year, date.today().month, min(date.today().day + 14, days_in_month))
     due_date = due_date.strftime('%d %B %Y')
+    period_end_str = period_end.strftime('%d %B %Y') if period_end else ''
+    period_end_html = f"<div style='font-size:12px;font-weight:300;color:var(--slate);margin-top:4px;'>Period ending &nbsp;<span style='color:var(--forest);font-weight:400;'>{period_end_str}</span></div>" if period_end_str else ''
 
     rows_html = ''
     if billing_type == 'fixed':
@@ -877,7 +879,10 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
       </div>
     </div>
     <div class="header-meta">
-      <div style="font-size:15px;font-weight:400;color:var(--forest);">Tax Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
+      <div>
+        <div style="font-size:15px;font-weight:400;color:var(--forest);">Tax Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
+        {period_end_html}
+      </div>
       <div style="display:flex;gap:28px;align-items:baseline;">
         <div style="font-size:15px;font-weight:300;color:var(--slate);">Date &nbsp;<span style="color:var(--forest);font-weight:400;">{inv_date}</span></div>
         <div style="font-size:15px;font-weight:300;color:var(--slate);">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
@@ -1470,6 +1475,9 @@ if page == 'invoice':
                 include_gst    = st.checkbox("Include GST (10%)", value=True)
                 _default_due   = date.today().replace(day=min(date.today().day + 14, 28))
                 inv_due_date   = st.date_input("Due date", value=_default_due, key='inv_due_date', format="DD/MM/YYYY")
+                _days_to_fri   = (4 - date.today().weekday()) % 7 or 7
+                _default_period = date.today() + __import__('datetime').timedelta(days=_days_to_fri)
+                inv_period_end = st.date_input("Period ending", value=_default_period, key='inv_period_end', format="DD/MM/YYYY")
 
             if inv_mode == 'timesheet':
                 # Warn about unapproved entries
@@ -1548,7 +1556,7 @@ if page == 'invoice':
                             inv_df, settings_dict, reserved_num, include_gst,
                             payment_terms=get_setting('payment_terms', ''),
                             billing_type=client_billing_type, client_day_rate=client_day_rate,
-                            due_date=inv_due_date,
+                            due_date=inv_due_date, period_end=inv_period_end,
                         )
                         if client_billing_type == 'day_rate':
                             subtotal = len(inv_df['entry_date'].unique()) * client_day_rate
@@ -1664,7 +1672,7 @@ if page == 'invoice':
                             None, settings_dict, fp_reserved_num, include_gst,
                             payment_terms=get_setting('payment_terms', ''),
                             billing_type='fixed', adhoc_lines=fp_lines,
-                            due_date=inv_due_date,
+                            due_date=inv_due_date, period_end=inv_period_end,
                         )
                         subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in fp_lines)
                         gst      = subtotal * 0.1 if include_gst else 0
