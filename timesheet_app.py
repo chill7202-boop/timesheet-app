@@ -523,7 +523,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
         due_date = date(date.today().year, date.today().month, min(date.today().day + 14, days_in_month))
     due_date = due_date.strftime('%d %B %Y')
     period_end_str = period_end.strftime('%d %B %Y') if period_end else ''
-    period_end_html = f"<div style='font-size:12px;font-weight:300;color:var(--slate);margin-top:4px;'>Period ending &nbsp;<span style='color:var(--forest);font-weight:400;'>{period_end_str}</span></div>" if period_end_str else ''
+    period_end_html = f"<div style='font-size:15px;font-weight:300;color:var(--slate);margin-top:4px;'>Period ending &nbsp;<span style='color:var(--forest);font-weight:400;'>{period_end_str}</span></div>" if period_end_str else ''
 
     rows_html = ''
     if billing_type == 'fixed':
