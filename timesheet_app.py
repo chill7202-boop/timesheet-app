@@ -512,7 +512,7 @@ def abr_get_detail(abn, guid):
     except Exception:
         return {}
 
-def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None):
+def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None, due_date=None):
     my_name    = settings.get('name', '')
     my_company = settings.get('company', '')
     my_address = settings.get('address', '')
@@ -522,9 +522,10 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     client_name    = settings.get('inv_client_name', '')
     client_address = settings.get('inv_client_address', '')
     inv_date       = date.today().strftime('%d %B %Y')
-    days_in_month  = [31,28,29,30,31,30,31,31,30,31,30,31][date.today().month - 1]
-    due_date       = date(date.today().year, date.today().month,
-                          min(date.today().day + 14, days_in_month)).strftime('%d %B %Y')
+    if due_date is None:
+        days_in_month = [31,28,29,30,31,30,31,31,30,31,30,31][date.today().month - 1]
+        due_date = date(date.today().year, date.today().month, min(date.today().day + 14, days_in_month))
+    due_date = due_date.strftime('%d %B %Y')
 
     rows_html = ''
     if billing_type == 'fixed':
@@ -1453,6 +1454,8 @@ if page == 'invoice':
                 else:
                     st.caption("No address on file — add it on the Clients page.")
                 include_gst    = st.checkbox("Include GST (10%)", value=True)
+                _default_due   = date.today().replace(day=min(date.today().day + 14, 28))
+                inv_due_date   = st.date_input("Due date", value=_default_due, key='inv_due_date', format="DD/MM/YYYY")
 
             if inv_mode == 'timesheet':
                 # Warn about unapproved entries
@@ -1531,6 +1534,7 @@ if page == 'invoice':
                             inv_df, settings_dict, reserved_num, include_gst,
                             payment_terms=get_setting('payment_terms', ''),
                             billing_type=client_billing_type, client_day_rate=client_day_rate,
+                            due_date=inv_due_date,
                         )
                         if client_billing_type == 'day_rate':
                             subtotal = len(inv_df['entry_date'].unique()) * client_day_rate
@@ -1646,6 +1650,7 @@ if page == 'invoice':
                             None, settings_dict, fp_reserved_num, include_gst,
                             payment_terms=get_setting('payment_terms', ''),
                             billing_type='fixed', adhoc_lines=fp_lines,
+                            due_date=inv_due_date,
                         )
                         subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in fp_lines)
                         gst      = subtotal * 0.1 if include_gst else 0
