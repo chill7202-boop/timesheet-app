@@ -883,10 +883,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
         <div style="font-size:15px;font-weight:400;color:var(--forest);">Tax Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
         {period_end_html}
       </div>
-      <div style="display:flex;gap:28px;align-items:baseline;">
-        <div style="font-size:15px;font-weight:300;color:var(--slate);">Date &nbsp;<span style="color:var(--forest);font-weight:400;">{inv_date}</span></div>
-        <div style="font-size:15px;font-weight:300;color:var(--slate);">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
-      </div>
+      <div style="font-size:15px;font-weight:300;color:var(--slate);">Date &nbsp;<span style="color:var(--forest);font-weight:400;">{inv_date}</span></div>
     </div>
   </div>
 
@@ -1475,8 +1472,10 @@ if page == 'invoice':
                 include_gst    = st.checkbox("Include GST (10%)", value=True)
                 _default_due   = date.today().replace(day=min(date.today().day + 14, 28))
                 inv_due_date   = st.date_input("Due date", value=_default_due, key='inv_due_date', format="DD/MM/YYYY")
+            with col1:
+                from datetime import timedelta
                 _days_to_fri   = (4 - date.today().weekday()) % 7 or 7
-                _default_period = date.today() + __import__('datetime').timedelta(days=_days_to_fri)
+                _default_period = date.today() + timedelta(days=_days_to_fri)
                 inv_period_end = st.date_input("Period ending", value=_default_period, key='inv_period_end', format="DD/MM/YYYY")
 
             if inv_mode == 'timesheet':
