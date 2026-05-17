@@ -641,7 +641,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   .bill-to-col {{
     display: flex;
     flex-direction: column;
-    justify-content: flex-start;
+    justify-content: space-between;
   }}
 
   .sender-col {{
@@ -649,6 +649,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     display: flex;
     flex-direction: column;
     align-items: flex-end;
+    justify-content: space-between;
   }}
 
   .wordmark {{
@@ -864,12 +865,12 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
       <span class="bill-eyebrow">Bill To</span>
       <div class="bill-name">{client_name}</div>
       {client_addr_html}
-      <div style="margin-top:20px;font-size:15px;font-weight:400;color:var(--forest);">Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
+      <div style="font-size:15px;font-weight:400;color:var(--forest);">Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
     </div>
     <div class="sender-col">
       <span class="wordmark">{sender_display}</span>
       <div class="sender-detail">{contact_html}</div>
-      <div style="margin-top:20px;font-size:15px;font-weight:300;color:var(--slate);text-align:right;">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
+      <div style="font-size:15px;font-weight:300;color:var(--slate);text-align:right;">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
     </div>
   </div>
 
