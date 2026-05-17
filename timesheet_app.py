@@ -320,7 +320,7 @@ def invoice_number_exists(inv_number):
 def load_adhoc_lines(client):
     con = duckdb.connect(DB_PATH)
     rows = con.execute(
-        "SELECT id, description, qty, unit_price FROM adhoc_draft_lines WHERE client=? ORDER BY sort_order, rowid",
+        "SELECT id, description, qty, unit_price FROM adhoc_draft_lines WHERE client=? ORDER BY sort_order",
         [client]
     ).fetchall()
     con.close()
@@ -333,8 +333,9 @@ def add_adhoc_line(client, description, qty, unit_price):
     ).fetchone()[0]
     con.execute(
         "INSERT INTO adhoc_draft_lines (id, client, description, qty, unit_price, sort_order) VALUES (?,?,?,?,?,?)",
-        [str(uuid.uuid4()), client, description, qty, unit_price, max_order + 1]
+        [str(uuid.uuid4()), client, description, qty, unit_price, int(max_order) + 1]
     )
+    con.commit()
     con.close()
 
 def update_adhoc_line(line_id, description, qty, unit_price):
@@ -343,16 +344,19 @@ def update_adhoc_line(line_id, description, qty, unit_price):
         "UPDATE adhoc_draft_lines SET description=?, qty=?, unit_price=? WHERE id=?",
         [description, qty, unit_price, line_id]
     )
+    con.commit()
     con.close()
 
 def delete_adhoc_line(line_id):
     con = duckdb.connect(DB_PATH)
     con.execute("DELETE FROM adhoc_draft_lines WHERE id=?", [line_id])
+    con.commit()
     con.close()
 
 def clear_adhoc_lines(client):
     con = duckdb.connect(DB_PATH)
     con.execute("DELETE FROM adhoc_draft_lines WHERE client=?", [client])
+    con.commit()
     con.close()
 
 
@@ -1615,9 +1619,12 @@ if page == 'invoice':
                     if not new_desc.strip():
                         st.error("Description is required.")
                     else:
-                        add_adhoc_line(inv_client, new_desc.strip(), new_qty, new_price)
-                        st.session_state.pop('generated_invoice', None)
-                        st.rerun()
+                        try:
+                            add_adhoc_line(inv_client, new_desc.strip(), new_qty, new_price)
+                            st.session_state.pop('generated_invoice', None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to save line: {e}")
 
                 if fp_lines:
                     already_used_fp = invoice_number_exists(inv_number)
