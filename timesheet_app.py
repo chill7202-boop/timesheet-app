@@ -632,8 +632,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   /* ── Header ── */
   .header {{
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
+    flex-direction: column;
     padding: 44px 52px 36px;
     border-bottom: 0.5px solid var(--stone);
   }}
@@ -641,7 +640,6 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   .bill-to-col {{
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
   }}
 
   .sender-col {{
@@ -649,7 +647,15 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     display: flex;
     flex-direction: column;
     align-items: flex-end;
+  }}
+
+  .header-meta {{
+    display: flex;
     justify-content: space-between;
+    align-items: baseline;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 0.5px solid var(--stone);
   }}
 
   .wordmark {{
@@ -861,16 +867,20 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   <div class="top-bar"></div>
 
   <div class="header">
-    <div class="bill-to-col">
-      <span class="bill-eyebrow">Bill To</span>
-      <div class="bill-name">{client_name}</div>
-      {client_addr_html}
-      <div style="font-size:15px;font-weight:400;color:var(--forest);">Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;width:100%;">
+      <div class="bill-to-col">
+        <span class="bill-eyebrow">Bill To</span>
+        <div class="bill-name">{client_name}</div>
+        {client_addr_html}
+      </div>
+      <div class="sender-col">
+        <span class="wordmark">{sender_display}</span>
+        <div class="sender-detail">{contact_html}</div>
+      </div>
     </div>
-    <div class="sender-col">
-      <span class="wordmark">{sender_display}</span>
-      <div class="sender-detail">{contact_html}</div>
-      <div style="font-size:15px;font-weight:300;color:var(--slate);text-align:right;">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
+    <div class="header-meta">
+      <div style="font-size:15px;font-weight:400;color:var(--forest);">Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
+      <div style="font-size:15px;font-weight:300;color:var(--slate);">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
     </div>
   </div>
 
