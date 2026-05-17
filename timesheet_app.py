@@ -856,7 +856,6 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
       <span class="invoice-number">{invoice_number}</span>
       <div class="invoice-meta-grid">
         <div>Date &nbsp;&nbsp;<span>{inv_date}</span></div>
-        <div>Due &nbsp;&nbsp;&nbsp;<span>{due_date}</span></div>
       </div>
     </div>
   </div>
