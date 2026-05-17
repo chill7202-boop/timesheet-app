@@ -654,8 +654,6 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     justify-content: space-between;
     align-items: baseline;
     margin-top: 24px;
-    padding-top: 16px;
-    border-top: 0.5px solid var(--stone);
   }}
 
   .wordmark {{
@@ -879,7 +877,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
       </div>
     </div>
     <div class="header-meta">
-      <div style="font-size:15px;font-weight:400;color:var(--forest);">Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
+      <div style="font-size:15px;font-weight:400;color:var(--forest);">Tax Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
       <div style="font-size:15px;font-weight:300;color:var(--slate);">Due &nbsp;<span style="color:var(--forest);font-weight:400;">{due_date}</span></div>
     </div>
   </div>
