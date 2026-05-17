@@ -861,6 +861,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
 
   <div class="header">
     <div class="bill-to-col">
+      <div style="font-size:11px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--sage);margin-bottom:6px;">Invoice &nbsp;<span style="color:var(--forest);font-weight:400;">{invoice_number}</span></div>
       <span class="bill-eyebrow">Bill To</span>
       <div class="bill-name">{client_name}</div>
       {client_addr_html}
@@ -869,9 +870,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
       <span class="wordmark">{sender_display}</span>
       {"<div style='font-size:12px;color:var(--slate);margin-bottom:10px;text-align:right'>" + sender_sub + "</div>" if sender_sub else ""}
       <div class="sender-detail">{contact_html}</div>
-      <div class="invoice-badge">
-        <span class="invoice-word">Invoice</span>
-        <span class="invoice-number">{invoice_number}</span>
+      <div class="invoice-badge" style="margin-top:20px;">
         <div class="invoice-meta-grid">
           <div>Date &nbsp;&nbsp;<span>{inv_date}</span></div>
         </div>
