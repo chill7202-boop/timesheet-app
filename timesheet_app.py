@@ -921,7 +921,6 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   </div>
 
   <div class="payment-note">
-    <strong>Payment due by {due_date}.</strong><br>
     {payment_terms.replace(chr(10), '<br>')}
   </div>
 
