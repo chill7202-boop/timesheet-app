@@ -834,9 +834,14 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     letter-spacing: 0.04em;
   }}
 
+  @page {{
+    margin: 0;
+    size: A4;
+  }}
+
   @media print {{
-    body {{ background: white; padding: 0; }}
-    .page {{ border: none; box-shadow: none; }}
+    html, body {{ background: white; padding: 0; margin: 0; }}
+    .page {{ border: none; box-shadow: none; margin: 0; max-width: 100%; }}
     .print-btn {{ display: none !important; }}
   }}
 
@@ -862,7 +867,7 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
 </style>
 </head>
 <body>
-<div class="print-btn"><button onclick="window.print()">Print / Save as PDF</button></div>
+<div class="print-btn"><button onclick="var w=window.open('','_blank');w.document.write(document.documentElement.outerHTML);w.document.close();w.focus();w.print();">Print / Save as PDF</button></div>
 <div class="page">
   <div class="top-bar"></div>
 
