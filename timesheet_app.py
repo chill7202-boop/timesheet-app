@@ -638,6 +638,19 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     border-bottom: 0.5px solid var(--stone);
   }}
 
+  .bill-to-col {{
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }}
+
+  .sender-col {{
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }}
+
   .wordmark {{
     font-family: 'Cormorant Garamond', serif;
     font-size: 26px;
@@ -654,9 +667,10 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     color: var(--slate);
     line-height: 1.8;
     opacity: 0.8;
+    text-align: right;
   }}
 
-  .invoice-badge {{ text-align: right; }}
+  .invoice-badge {{ text-align: right; margin-top: 20px; }}
 
   .invoice-word {{
     font-family: 'Cormorant Garamond', serif;
@@ -846,24 +860,23 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   <div class="top-bar"></div>
 
   <div class="header">
-    <div>
-      <span class="wordmark">{sender_display}</span>
-      {"<div style='font-size:12px;color:var(--slate);margin-bottom:10px'>" + sender_sub + "</div>" if sender_sub else ""}
-      <div class="sender-detail">{contact_html}</div>
+    <div class="bill-to-col">
+      <span class="bill-eyebrow">Bill To</span>
+      <div class="bill-name">{client_name}</div>
+      {client_addr_html}
     </div>
-    <div class="invoice-badge">
-      <span class="invoice-word">Invoice</span>
-      <span class="invoice-number">{invoice_number}</span>
-      <div class="invoice-meta-grid">
-        <div>Date &nbsp;&nbsp;<span>{inv_date}</span></div>
+    <div class="sender-col">
+      <span class="wordmark">{sender_display}</span>
+      {"<div style='font-size:12px;color:var(--slate);margin-bottom:10px;text-align:right'>" + sender_sub + "</div>" if sender_sub else ""}
+      <div class="sender-detail">{contact_html}</div>
+      <div class="invoice-badge">
+        <span class="invoice-word">Invoice</span>
+        <span class="invoice-number">{invoice_number}</span>
+        <div class="invoice-meta-grid">
+          <div>Date &nbsp;&nbsp;<span>{inv_date}</span></div>
+        </div>
       </div>
     </div>
-  </div>
-
-  <div class="bill-strip">
-    <span class="bill-eyebrow">Bill To</span>
-    <div class="bill-name">{client_name}</div>
-    {client_addr_html}
   </div>
 
   <div class="table-wrap">
