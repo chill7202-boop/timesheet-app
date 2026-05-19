@@ -108,6 +108,11 @@ def init_db():
         con.execute("UPDATE entries SET status='submitted' WHERE submitted=true AND status='open'")
     except Exception:
         pass
+    # Rename old client name
+    try:
+        con.execute("UPDATE entries SET client='Air Navigator Group' WHERE client='airnavigator.com'")
+    except Exception:
+        pass
     con.close()
 
 
