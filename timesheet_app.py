@@ -111,6 +111,7 @@ def init_db():
     # Rename old client name
     try:
         con.execute("UPDATE entries SET client='Airnavigator Group' WHERE client='airnavigator.com'")
+        con.execute("UPDATE clients SET name='Airnavigator Group' WHERE name='airnavigator.com'")
     except Exception:
         pass
     con.close()
