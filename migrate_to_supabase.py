@@ -54,10 +54,27 @@ for table in TABLES:
         print("empty, skipped")
         continue
 
-    cols = list(df.columns)
-    col_list  = ", ".join(cols)
-    val_list  = ", ".join(["%s"] * len(cols))
-    conflict  = f"ON CONFLICT (id) DO NOTHING" if "id" in cols else ""
+    # Only use columns that exist in the target Postgres table
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name=%s AND table_schema='public'",
+        [table]
+    )
+    pg_cols = {r[0] for r in cur.fetchall()}
+    cols = [c for c in df.columns if c in pg_cols]
+
+    if not cols:
+        print("no matching columns, skipped")
+        continue
+
+    df = df[cols]
+    col_list = ", ".join(cols)
+    val_list = ", ".join(["%s"] * len(cols))
+    if table == "settings":
+        conflict = "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    elif "id" in cols:
+        conflict = "ON CONFLICT (id) DO NOTHING"
+    else:
+        conflict = ""
 
     for _, row in df.iterrows():
         values = [None if pd.isna(v) else v for v in row]

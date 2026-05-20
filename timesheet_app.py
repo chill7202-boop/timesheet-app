@@ -9,16 +9,29 @@ from datetime import date, datetime
 st.set_page_config(page_title="Timesheet", page_icon="🕐", layout="wide")
 
 
-def get_conn():
+def _db_url():
     try:
-        db_url = st.secrets.get("DATABASE_URL", "")
+        url = st.secrets.get("DATABASE_URL", "")
     except Exception:
-        db_url = ""
-    if not db_url:
-        db_url = os.environ.get("DATABASE_URL", "")
-    con = psycopg2.connect(db_url)
+        url = ""
+    return url or os.environ.get("DATABASE_URL", "")
+
+
+@st.cache_resource
+def _get_pool():
+    import psycopg2.pool
+    return psycopg2.pool.SimpleConnectionPool(1, 5, _db_url())
+
+
+def get_conn():
+    pool = _get_pool()
+    con = pool.getconn()
     con.autocommit = True
     return con
+
+
+def release_conn(con):
+    _get_pool().putconn(con)
 
 
 def init_db():
@@ -101,14 +114,14 @@ def init_db():
         )
     """)
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
 def get_employees():
     con = get_conn()
     df = pd.read_sql("SELECT * FROM employees ORDER BY name", con)
-    con.close()
+    release_conn(con)
     return df.copy()
 
 
@@ -127,7 +140,7 @@ def save_employee(emp_id, name, email, role, rate):
             [str(uuid.uuid4()), name, email, role, rate]
         )
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def delete_employee(emp_id):
@@ -136,14 +149,14 @@ def delete_employee(emp_id):
     cur = con.cursor()
     cur.execute("DELETE FROM employees WHERE id = %s", [emp_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
 def get_clients_list():
     con = get_conn()
     df = pd.read_sql("SELECT * FROM clients ORDER BY name", con)
-    con.close()
+    release_conn(con)
     return df.copy()
 
 
@@ -162,7 +175,7 @@ def save_client(client_id, name, address, contact_name, email, billing_type='hou
             [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate, website, billable]
         )
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def delete_client(client_id):
@@ -171,7 +184,7 @@ def delete_client(client_id):
     cur = con.cursor()
     cur.execute("DELETE FROM clients WHERE id = %s", [client_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
@@ -181,7 +194,7 @@ def get_setting(key, default=''):
     cur.execute("SELECT value FROM settings WHERE key = %s", [key])
     row = cur.fetchone()
     cur.close()
-    con.close()
+    release_conn(con)
     return row[0] if row else default
 
 
@@ -194,7 +207,7 @@ def save_setting(key, value):
         [key, value]
     )
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def add_entry(entry_date, client, project, description, hours, rate, employee='Self'):
@@ -206,7 +219,7 @@ def add_entry(entry_date, client, project, description, hours, rate, employee='S
         [str(uuid.uuid4()), entry_date, client, project, description, hours, rate, employee, 'open']
     )
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
@@ -239,7 +252,7 @@ def load_entries(client=None, project=None, from_date=None, to_date=None, employ
             params.append(status)
     query += " ORDER BY entry_date DESC"
     df = pd.read_sql(query, con, params=params)
-    con.close()
+    release_conn(con)
     return df
 
 
@@ -249,7 +262,7 @@ def delete_entry(entry_id):
     cur = con.cursor()
     cur.execute("DELETE FROM entries WHERE id = %s", [entry_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def set_status(entry_id, status):
@@ -258,7 +271,7 @@ def set_status(entry_id, status):
     cur = con.cursor()
     cur.execute("UPDATE entries SET status = %s WHERE id = %s", [status, entry_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def set_status_bulk(ids, status):
@@ -268,7 +281,7 @@ def set_status_bulk(ids, status):
     for i in ids:
         cur.execute("UPDATE entries SET status = %s WHERE id = %s", [status, i])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def get_next_invoice_number():
@@ -283,7 +296,7 @@ def get_next_invoice_number():
     cur.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE %s", [f"{base}%"])
     count = cur.fetchone()[0]
     cur.close()
-    con.close()
+    release_conn(con)
     return base if count == 0 else f"{base}-{count + 1}"
 
 
@@ -303,7 +316,7 @@ def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hou
         [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False, html_content]
     )
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
@@ -316,7 +329,7 @@ def get_invoices(client=None):
         p.append(client)
     q += " ORDER BY invoice_date DESC, invoice_number DESC"
     df = pd.read_sql(q, con, params=p)
-    con.close()
+    release_conn(con)
     return df
 
 
@@ -329,7 +342,7 @@ def mark_invoice_paid(invoice_id, paid=True):
     else:
         cur.execute("UPDATE invoices SET paid=FALSE, paid_date=NULL WHERE id=%s", [invoice_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def invoice_number_exists(inv_number):
@@ -338,7 +351,7 @@ def invoice_number_exists(inv_number):
     cur.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number = %s", [inv_number])
     row = cur.fetchone()
     cur.close()
-    con.close()
+    release_conn(con)
     return row[0] > 0
 
 
@@ -353,7 +366,7 @@ def load_adhoc_lines(client):
     )
     rows = cur.fetchall()
     cur.close()
-    con.close()
+    release_conn(con)
     return [{'id': r[0], 'description': r[1], 'qty': float(r[2]), 'unit_price': float(r[3])} for r in rows]
 
 def add_adhoc_line(client, description, qty, unit_price):
@@ -368,7 +381,7 @@ def add_adhoc_line(client, description, qty, unit_price):
         [str(uuid.uuid4()), client, description, qty, unit_price, int(max_order) + 1]
     )
     cur.close()
-    con.close()
+    release_conn(con)
 
 def update_adhoc_line(line_id, description, qty, unit_price):
     con = get_conn()
@@ -378,21 +391,21 @@ def update_adhoc_line(line_id, description, qty, unit_price):
         [description, qty, unit_price, line_id]
     )
     cur.close()
-    con.close()
+    release_conn(con)
 
 def delete_adhoc_line(line_id):
     con = get_conn()
     cur = con.cursor()
     cur.execute("DELETE FROM adhoc_draft_lines WHERE id=%s", [line_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 def clear_adhoc_lines(client):
     con = get_conn()
     cur = con.cursor()
     cur.execute("DELETE FROM adhoc_draft_lines WHERE client=%s", [client])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
@@ -402,7 +415,7 @@ def get_clients():
     cur.execute("SELECT DISTINCT client FROM entries ORDER BY client")
     rows = cur.fetchall()
     cur.close()
-    con.close()
+    release_conn(con)
     return [r[0] for r in rows]
 
 
@@ -416,7 +429,7 @@ def get_projects(client=None):
         cur.execute("SELECT DISTINCT project FROM entries ORDER BY project")
     rows = cur.fetchall()
     cur.close()
-    con.close()
+    release_conn(con)
     return [r[0] for r in rows]
 
 
@@ -427,7 +440,7 @@ def get_projects_list(client_id=None):
         df = pd.read_sql("SELECT * FROM projects WHERE client_id=%s ORDER BY code, name", con, params=[client_id])
     else:
         df = pd.read_sql("SELECT * FROM projects ORDER BY code, name", con)
-    con.close()
+    release_conn(con)
     return df
 
 
@@ -440,7 +453,7 @@ def save_project(project_id, code, name, client_id=None):
     else:
         cur.execute("INSERT INTO projects VALUES (%s, %s, %s, %s)", [str(uuid.uuid4()), code, name, client_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 def delete_project(project_id):
@@ -449,7 +462,7 @@ def delete_project(project_id):
     cur = con.cursor()
     cur.execute("DELETE FROM projects WHERE id=%s", [project_id])
     cur.close()
-    con.close()
+    release_conn(con)
 
 
 @st.cache_data(ttl=60)
@@ -491,7 +504,7 @@ def get_dashboard_data():
         GROUP BY client ORDER BY revenue DESC LIMIT 10
     """, con, params=[three_months_ago])
 
-    con.close()
+    release_conn(con)
     return revenue, hours.copy(), unpaid.copy(), top_clients.copy()
 
 
@@ -1262,7 +1275,7 @@ if page == 'timesheet':
                         """, [row['Date'], row['Employee'], row['Client'], row['Project'],
                               row['Description'], row['Hours'], row['Rate ($)'], ids[i]])
                 cur.close()
-                con.close()
+                release_conn(con)
                 st.cache_data.clear()
                 st.success("Saved.")
                 st.rerun()
@@ -2246,7 +2259,7 @@ if page == 'settings':
                 if confirm in ('invoices', 'all'):
                     cur.execute("DELETE FROM invoices")
                 cur.close()
-                con.close()
+                release_conn(con)
                 st.cache_data.clear()
                 st.session_state.pop('confirm_clear', None)
                 st.success("Done.")
