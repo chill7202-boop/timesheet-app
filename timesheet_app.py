@@ -515,11 +515,16 @@ def abr_get_detail(abn, guid):
         return {}
 
 def generate_invoice_html(entries_df, settings, invoice_number, include_gst, payment_terms='', billing_type='hourly', client_day_rate=0, adhoc_lines=None, due_date=None, period_end=None):
+    import base64 as _b64
     my_name    = settings.get('name', '')
     my_company = settings.get('company', '')
     my_address = settings.get('address', '')
     my_abn     = settings.get('abn', '')
     my_email   = settings.get('email', '')
+    bank_name      = settings.get('bank_name', '')
+    account_name   = settings.get('account_name', '')
+    bsb            = settings.get('bsb', '')
+    account_number = settings.get('account_number', '')
 
     client_name    = settings.get('inv_client_name', '')
     client_address = settings.get('inv_client_address', '')
@@ -527,22 +532,24 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
     if due_date is None:
         days_in_month = [31,28,29,30,31,30,31,31,30,31,30,31][date.today().month - 1]
         due_date = date(date.today().year, date.today().month, min(date.today().day + 14, days_in_month))
-    due_date = due_date.strftime('%d %B %Y')
+    due_date_str = due_date.strftime('%d %B %Y')
     period_end_str = period_end.strftime('%d %B %Y') if period_end else ''
-    period_end_html = f"<div style='font-size:15px;font-weight:300;color:var(--slate);margin-top:4px;'>Period ending &nbsp;<span style='color:var(--forest);font-weight:400;'>{period_end_str}</span></div>" if period_end_str else ''
 
+    # ── Logo (embedded) ──────────────────────────────────────────────────────
+    LOGO_B64 = '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'
+
+    # ── Row generation ────────────────────────────────────────────────────────
     rows_html = ''
     if billing_type == 'fixed':
         for idx, line in enumerate(adhoc_lines or []):
             amount = float(line.get('qty', 1)) * float(line.get('unit_price', 0))
             rows_html += f"""
         <tr>
-          <td style="white-space:nowrap">{idx + 1}</td>
-          <td>{line.get('description', '')}</td>
-          <td></td>
-          <td style="text-align:right">{float(line.get('qty', 1)):.2f}</td>
-          <td style="text-align:right">${float(line.get('unit_price', 0)):.2f}</td>
-          <td style="text-align:right;font-weight:400;color:#2D4A3E">${amount:.2f}</td>
+          <td>{idx + 1}</td>
+          <td colspan="2">{line.get('description', '')}</td>
+          <td class="num">{float(line.get('qty', 1)):.2f}</td>
+          <td class="num">${float(line.get('unit_price', 0)):,.2f}</td>
+          <td class="num amt">${amount:,.2f}</td>
         </tr>"""
         subtotal = sum(float(l.get('qty', 1)) * float(l.get('unit_price', 0)) for l in (adhoc_lines or []))
     elif billing_type == 'day_rate':
@@ -556,9 +563,9 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
           <td style="white-space:nowrap">{pd.to_datetime(entry_date).strftime('%d/%m/%Y')}</td>
           <td>{projects}</td>
           <td>{descs}</td>
-          <td style="text-align:right">1</td>
-          <td style="text-align:right">${float(client_day_rate):.2f}</td>
-          <td style="text-align:right;font-weight:400;color:#2D4A3E">${amount:.2f}</td>
+          <td class="num">1</td>
+          <td class="num">${float(client_day_rate):,.2f}</td>
+          <td class="num amt">${amount:,.2f}</td>
         </tr>"""
         subtotal = len(grouped) * float(client_day_rate)
     else:
@@ -569,307 +576,241 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
           <td style="white-space:nowrap">{pd.to_datetime(row['entry_date']).strftime('%d/%m/%Y')}</td>
           <td>{row['project']}</td>
           <td>{row['description']}</td>
-          <td style="text-align:right">{float(row['hours']):.2f}</td>
-          <td style="text-align:right">${float(row['rate']):.2f}</td>
-          <td style="text-align:right;font-weight:400;color:#2D4A3E">${amount:.2f}</td>
+          <td class="num">{float(row['hours']):.2f}</td>
+          <td class="num">${float(row['rate']):,.2f}</td>
+          <td class="num amt">${amount:,.2f}</td>
         </tr>"""
         subtotal = sum(float(r['hours']) * float(r['rate']) for _, r in entries_df.iterrows())
-    gst = subtotal * 0.1 if include_gst else 0
+
+    gst   = subtotal * 0.1 if include_gst else 0
     total = subtotal + gst
 
-    gst_row = f"""
-      <tr>
-        <td class="t-label">GST (10%)</td>
-        <td class="t-value">${gst:.2f}</td>
-      </tr>""" if include_gst else ''
+    gst_row = f'<tr><td class="lbl">GST (10%)</td><td class="val">${gst:,.2f}</td></tr>' if include_gst else ''
 
-    abn_line         = f'ABN &nbsp;{my_abn}' if my_abn else ''
-    sender_display   = my_company or my_name
-    sender_sub       = my_name if my_company and my_name != my_company else ''
-    client_addr_html = f'<div style="margin-top:6px;color:#6B8F71;font-size:13px;line-height:1.7;white-space:pre-line">{client_address}</div>' if client_address else ''
+    sender_display = my_company or my_name
+    abn_html       = f'<div>ABN &nbsp;{my_abn}</div>' if my_abn else ''
+    email_html     = f'<div>{my_email}</div>' if my_email else ''
+    addr_html      = f'<div style="white-space:pre-line">{my_address}</div>' if my_address else ''
+    client_addr_html = f'<div class="c-addr">{client_address}</div>' if client_address else ''
+    period_row     = f'<tr><td class="lbl">Period ending</td><td class="val">{period_end_str}</td></tr>' if period_end_str else ''
 
-    contact_parts = [p for p in [my_address, abn_line, my_email] if p]
-    contact_html  = '<br>'.join(contact_parts)
+    # Payment details block
+    pay_rows = ''
+    if bank_name:      pay_rows += f'<tr><td>Bank</td><td>{bank_name}</td></tr>'
+    if account_name:   pay_rows += f'<tr><td>Account name</td><td>{account_name}</td></tr>'
+    if bsb:            pay_rows += f'<tr><td>BSB</td><td>{bsb}</td></tr>'
+    if account_number: pay_rows += f'<tr><td>Account</td><td>{account_number}</td></tr>'
+    pay_rows += f'<tr><td>Reference</td><td>{invoice_number}</td></tr>'
+    payment_section = f'''
+  <div class="pay-section">
+    <div class="section-label">PAYMENT DETAILS</div>
+    <table class="pay-table">{pay_rows}</table>
+  </div>''' if (bank_name or bsb or account_number) else ''
+
+    notes_section = f'''
+  <div class="notes-section">
+    <div class="section-label">NOTES</div>
+    <div class="notes-body">{payment_terms.replace(chr(10), '<br>')}</div>
+  </div>''' if payment_terms.strip() else ''
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Invoice {invoice_number}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<title>Tax Invoice {invoice_number}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after {{ margin: 0; padding: 0; box-sizing: border-box; }}
-
-  :root {{
-    --forest:    #2D4A3E;
-    --navy:      #1C2B3A;
-    --sage:      #6B8F71;
-    --cream:     #F5F0E8;
-    --stone:     #C8BFA8;
-    --parchment: #EDE8DC;
-    --slate:     #4A5568;
-    --chalk:     #FAFAF7;
-  }}
-
+  *, *::before, *::after {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{
-    font-family: 'DM Sans', sans-serif;
-    font-weight: 300;
-    color: var(--slate);
-    background: var(--cream);
-    padding: 48px 24px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 13px;
+    color: #374151;
+    background: #F3F4F6;
+    padding: 40px 20px;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-    line-height: 1.7;
+    line-height: 1.6;
   }}
-
   .page {{
     max-width: 800px;
     margin: 0 auto;
-    background: var(--chalk);
-    border: 0.5px solid var(--stone);
+    background: #ffffff;
+    box-shadow: 0 1px 12px rgba(0,0,0,0.08);
   }}
+  .top-bar {{ height: 5px; background: #1F4D78; }}
 
-  /* ── Top bar ── */
-  .top-bar {{
-    height: 4px;
-    background: var(--forest);
-  }}
-
-  /* ── Header ── */
+  /* Header */
   .header {{
     display: flex;
-    flex-direction: column;
-    padding: 44px 52px 36px;
-    border-bottom: 0.5px solid var(--stone);
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 36px 48px 28px;
+    border-bottom: 1px solid #E5E7EB;
   }}
-
-  .bill-to-col {{
-    display: flex;
-    flex-direction: column;
-  }}
-
-  .sender-col {{
+  .logo {{ height: 36px; object-fit: contain; }}
+  .inv-title {{
+    font-size: 28px;
+    font-weight: 600;
+    color: #0D1B2A;
+    letter-spacing: -0.5px;
     text-align: right;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
+  }}
+  .inv-number {{
+    font-size: 14px;
+    color: #6B7280;
+    text-align: right;
+    margin-top: 4px;
   }}
 
-  .header-meta {{
+  /* Meta section */
+  .meta {{
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
-    margin-top: 24px;
+    padding: 28px 48px;
+    background: #F9FAFB;
+    border-bottom: 1px solid #E5E7EB;
+    gap: 40px;
   }}
-
-  .wordmark {{
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 26px;
-    font-weight: 400;
-    letter-spacing: 0.04em;
-    color: var(--forest);
-    display: block;
-    margin-bottom: 12px;
-  }}
-
-  .sender-detail {{
-    font-size: 12px;
-    font-weight: 300;
-    color: var(--slate);
-    line-height: 1.8;
-    opacity: 0.8;
-    text-align: right;
-  }}
-
-  .invoice-badge {{ text-align: right; margin-top: 20px; }}
-
-  .invoice-word {{
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--sage);
-    display: block;
-    margin-bottom: 8px;
-  }}
-
-  .invoice-number {{
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 42px;
-    font-weight: 300;
-    color: var(--navy);
-    letter-spacing: -0.5px;
-    line-height: 1;
-    display: block;
-    margin-bottom: 14px;
-  }}
-
-  .invoice-meta-grid {{
-    font-size: 12px;
-    font-weight: 300;
-    color: var(--slate);
-    line-height: 1.9;
-  }}
-  .invoice-meta-grid span {{ color: var(--forest); font-weight: 400; }}
-
-  /* ── Bill-to ── */
-  .bill-strip {{
-    padding: 28px 52px;
-    border-bottom: 0.5px solid var(--stone);
-    background: var(--cream);
-  }}
-
-  .bill-eyebrow {{
+  .bill-to {{ flex: 1; }}
+  .meta-label {{
     font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--sage);
-    display: block;
-    margin-bottom: 8px;
-  }}
-
-  .bill-name {{
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 22px;
-    font-weight: 400;
-    color: var(--navy);
-    line-height: 1.2;
-  }}
-
-  /* ── Table ── */
-  .table-wrap {{ padding: 0 52px; }}
-
-  table {{
-    width: 100%;
-    border-collapse: collapse;
-    margin: 32px 0 0;
-    font-size: 13px;
-    font-weight: 300;
-  }}
-
-  thead tr {{ background: var(--forest); }}
-
-  thead th {{
-    padding: 12px 14px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--cream);
-    text-align: left;
+    color: #9CA3AF;
+    margin-bottom: 8px;
   }}
-  thead th:nth-child(4),
-  thead th:nth-child(5),
-  thead th:nth-child(6) {{ text-align: right; }}
-
-  tbody tr {{ border-bottom: 0.5px solid var(--parchment); }}
-  tbody tr:nth-child(even) {{ background: var(--cream); }}
-
-  tbody td {{
-    padding: 12px 14px;
-    color: var(--slate);
-    vertical-align: top;
+  .client-name {{
+    font-size: 16px;
+    font-weight: 600;
+    color: #0D1B2A;
+    line-height: 1.3;
+  }}
+  .c-addr {{
+    font-size: 12px;
+    color: #6B7280;
+    margin-top: 4px;
+    line-height: 1.6;
+    white-space: pre-line;
+  }}
+  .inv-meta-right {{ text-align: right; min-width: 220px; }}
+  .meta-table {{ margin-left: auto; border-collapse: collapse; }}
+  .meta-table td {{ padding: 3px 0 3px 20px; font-size: 13px; }}
+  .meta-table td:first-child {{ color: #6B7280; text-align: left; }}
+  .meta-table td:last-child {{ color: #0D1B2A; font-weight: 500; text-align: right; }}
+  .status-badge {{
+    display: inline-block;
+    margin-top: 12px;
+    padding: 3px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: #FEF3C7;
+    color: #92400E;
+    border: 1px solid #FDE68A;
   }}
 
-  /* ── Totals ── */
-  .totals-wrap {{
+  /* Sender strip */
+  .sender-strip {{
     display: flex;
     justify-content: flex-end;
-    padding: 8px 52px 36px;
+    padding: 14px 48px;
+    border-bottom: 1px solid #E5E7EB;
+    font-size: 12px;
+    color: #6B7280;
+    gap: 32px;
   }}
+  .sender-strip strong {{ color: #0D1B2A; font-weight: 600; }}
 
-  .totals-table {{
-    width: 260px;
-    border-collapse: collapse;
-    font-size: 13px;
-    font-weight: 300;
+  /* Table */
+  .table-wrap {{ padding: 0 48px; }}
+  table.items {{ width: 100%; border-collapse: collapse; margin: 28px 0 0; font-size: 13px; }}
+  table.items thead tr {{ background: #1F4D78; }}
+  table.items thead th {{
+    padding: 11px 14px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #ffffff;
+    text-align: left;
   }}
-  .totals-table td {{ padding: 7px 12px; }}
-  .totals-table .t-label {{ text-align: right; color: var(--slate); opacity: 0.8; }}
-  .totals-table .t-value {{ text-align: right; color: var(--navy); }}
-  .totals-table .t-divider td {{ border-top: 0.5px solid var(--stone); padding-top: 12px; }}
-  .totals-table .t-total td {{
-    background: var(--forest);
-    color: var(--cream);
-    font-weight: 500;
+  table.items thead th.num {{ text-align: right; }}
+  table.items tbody tr {{ border-bottom: 1px solid #F3F4F6; }}
+  table.items tbody tr:nth-child(even) {{ background: #F9FAFB; }}
+  table.items tbody td {{ padding: 11px 14px; color: #374151; vertical-align: top; }}
+  table.items tbody td.num {{ text-align: right; }}
+  table.items tbody td.amt {{ color: #0D1B2A; font-weight: 500; }}
+
+  /* Totals */
+  .totals-wrap {{ display: flex; justify-content: flex-end; padding: 16px 48px 32px; }}
+  table.totals {{ border-collapse: collapse; min-width: 240px; font-size: 13px; }}
+  table.totals td {{ padding: 6px 12px; }}
+  .lbl {{ text-align: right; color: #6B7280; }}
+  .val {{ text-align: right; color: #0D1B2A; font-weight: 500; }}
+  tr.divider td {{ border-top: 1px solid #E5E7EB; padding-top: 10px; }}
+  tr.total-row td {{
+    background: #0D1B2A;
+    color: #ffffff;
+    font-weight: 600;
     font-size: 14px;
-    padding: 13px 12px;
+    padding: 12px 14px;
   }}
-  .totals-table .t-total td:first-child {{ text-align: right; }}
-  .totals-table .t-total td:last-child  {{ text-align: right; }}
+  tr.total-row td:first-child {{ text-align: right; border-radius: 4px 0 0 4px; }}
+  tr.total-row td:last-child  {{ text-align: right; border-radius: 0 4px 4px 0; }}
 
-  /* ── Payment note ── */
-  .payment-note {{
-    margin: 0 52px 44px;
-    padding: 18px 22px;
-    border-left: 2px solid var(--sage);
-    background: var(--parchment);
-    font-size: 12.5px;
-    font-weight: 300;
-    color: var(--slate);
-    line-height: 1.75;
+  /* Payment + Notes */
+  .pay-section, .notes-section {{
+    margin: 0 48px 24px;
+    padding: 18px 20px;
+    background: #F9FAFB;
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
   }}
-  .payment-note strong {{ color: var(--forest); font-weight: 500; }}
+  .section-label {{
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #1F4D78;
+    margin-bottom: 10px;
+  }}
+  table.pay-table {{ border-collapse: collapse; font-size: 13px; }}
+  table.pay-table td {{ padding: 3px 20px 3px 0; color: #374151; }}
+  table.pay-table td:first-child {{ color: #6B7280; width: 130px; }}
+  .notes-body {{ font-size: 12.5px; color: #6B7280; line-height: 1.7; }}
 
-  /* ── Footer ── */
+  /* Footer */
   .footer {{
-    border-top: 0.5px solid var(--stone);
-    padding: 20px 52px;
+    border-top: 1px solid #E5E7EB;
+    padding: 16px 48px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: var(--cream);
-  }}
-  .footer-mark {{
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 14px;
-    font-weight: 400;
-    letter-spacing: 0.04em;
-    color: var(--forest);
-    opacity: 0.7;
-  }}
-  .footer-note {{
+    background: #F9FAFB;
     font-size: 11px;
-    font-weight: 300;
-    color: var(--stone);
-    letter-spacing: 0.04em;
+    color: #9CA3AF;
   }}
+  .footer strong {{ color: #374151; }}
 
-  @page {{
-    margin: 0;
-    size: A4;
-  }}
-
+  @page {{ margin: 0; size: A4; }}
   @media print {{
     html, body {{ background: white; padding: 0; margin: 0; }}
-    .page {{ border: none; box-shadow: none; margin: 0; max-width: 100%; }}
+    .page {{ box-shadow: none; margin: 0; max-width: 100%; }}
     .print-btn {{ display: none !important; }}
   }}
-
   .print-btn {{
-    position: fixed;
-    bottom: 28px;
-    right: 28px;
-    z-index: 999;
+    position: fixed; bottom: 24px; right: 24px; z-index: 999;
   }}
   .print-btn button {{
-    background: var(--forest);
-    color: var(--cream);
-    border: none;
-    padding: 12px 22px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 13px;
-    font-weight: 400;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    box-shadow: 0 4px 16px rgba(45,74,62,0.25);
+    background: #1F4D78; color: #fff; border: none;
+    padding: 11px 22px; font-family: 'Inter', sans-serif;
+    font-size: 13px; font-weight: 500; cursor: pointer;
+    border-radius: 4px; box-shadow: 0 4px 12px rgba(31,77,120,0.3);
   }}
-  .print-btn button:hover {{ background: var(--navy); }}
+  .print-btn button:hover {{ background: #0D1B2A; }}
 </style>
 </head>
 <body>
@@ -878,66 +819,67 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   <div class="top-bar"></div>
 
   <div class="header">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;width:100%;">
-      <div class="bill-to-col">
-        <span class="bill-eyebrow">Bill To</span>
-        <div class="bill-name">{client_name}</div>
-        {client_addr_html}
-      </div>
-      <div class="sender-col">
-        <span class="wordmark">{sender_display}</span>
-        <div class="sender-detail">{contact_html}</div>
-      </div>
+    <img src="data:image/png;base64,{LOGO_B64}" class="logo" alt="Kingsleyhill">
+    <div>
+      <div class="inv-title">TAX INVOICE</div>
+      <div class="inv-number">{invoice_number}</div>
     </div>
-    <div class="header-meta">
-      <div>
-        <div style="font-size:15px;font-weight:400;color:var(--forest);">Tax Invoice &nbsp;<strong style="font-size:17px;letter-spacing:0.02em;">{invoice_number}</strong></div>
-        {period_end_html}
-      </div>
-      <div style="font-size:15px;font-weight:300;color:var(--slate);">Date &nbsp;<span style="color:var(--forest);font-weight:400;">{inv_date}</span></div>
+  </div>
+
+  <div class="sender-strip">
+    <span><strong>{sender_display}</strong></span>
+    {f'<span>{my_address}</span>' if my_address else ''}
+    {f'<span>ABN {my_abn}</span>' if my_abn else ''}
+    {f'<span>{my_email}</span>' if my_email else ''}
+  </div>
+
+  <div class="meta">
+    <div class="bill-to">
+      <div class="meta-label">Bill To</div>
+      <div class="client-name">{client_name}</div>
+      {client_addr_html}
+    </div>
+    <div class="inv-meta-right">
+      <table class="meta-table">
+        <tr><td>Date</td><td>{inv_date}</td></tr>
+        <tr><td>Due Date</td><td>{due_date_str}</td></tr>
+        {period_row}
+      </table>
+      <div><span class="status-badge">UNPAID</span></div>
     </div>
   </div>
 
   <div class="table-wrap">
-    <table>
+    <table class="items">
       <thead>
         <tr>
-          <th>{"#" if billing_type == 'fixed' else "Date"}</th>
-          <th>{"Description" if billing_type == 'fixed' else "Project"}</th>
-          <th>{"" if billing_type == 'fixed' else "Description"}</th>
-          <th>{"Qty" if billing_type == 'fixed' else ("Days" if billing_type == 'day_rate' else "Hours")}</th>
-          <th>{"Unit Price" if billing_type == 'fixed' else ("Day Rate" if billing_type == 'day_rate' else "Rate")}</th>
-          <th>Amount</th>
+          <th>{'#' if billing_type == 'fixed' else 'Date'}</th>
+          <th>{'Description' if billing_type == 'fixed' else 'Project'}</th>
+          <th>{'&nbsp;' if billing_type == 'fixed' else 'Description'}</th>
+          <th class="num">{'Qty' if billing_type == 'fixed' else ('Days' if billing_type == 'day_rate' else 'Hours')}</th>
+          <th class="num">{'Unit Price' if billing_type == 'fixed' else ('Day Rate' if billing_type == 'day_rate' else 'Rate')}</th>
+          <th class="num">Amount</th>
         </tr>
       </thead>
-      <tbody>
-        {rows_html}
-      </tbody>
+      <tbody>{rows_html}</tbody>
     </table>
   </div>
 
   <div class="totals-wrap">
-    <table class="totals-table">
-      <tr>
-        <td class="t-label">Subtotal</td>
-        <td class="t-value">${subtotal:.2f}</td>
-      </tr>
+    <table class="totals">
+      <tr><td class="lbl">Subtotal</td><td class="val">${subtotal:,.2f}</td></tr>
       {gst_row}
-      <tr class="t-divider"><td colspan="2"></td></tr>
-      <tr class="t-total">
-        <td>Total (AUD)</td>
-        <td>${total:.2f}</td>
-      </tr>
+      <tr class="divider"><td colspan="2"></td></tr>
+      <tr class="total-row"><td>Total Due (AUD)</td><td>${total:,.2f}</td></tr>
     </table>
   </div>
 
-  <div class="payment-note">
-    {payment_terms.replace(chr(10), '<br>')}
-  </div>
+  {payment_section}
+  {notes_section}
 
   <div class="footer">
-    <span class="footer-mark">{sender_display}</span>
-    <span class="footer-note">Thank you</span>
+    <span><strong>{sender_display}</strong> &nbsp;·&nbsp; Technology Consulting &amp; Professional Services</span>
+    <span>Thank you for your business</span>
   </div>
 </div>
 </body>
@@ -2157,10 +2099,20 @@ if page == 'settings':
             value=float(get_setting('default_rate', '0') or 0)
         )
         payment_terms = st.text_area(
-            "Payment terms",
+            "Payment terms / notes",
             value=get_setting('payment_terms', 'Payment due within 14 days of invoice date.\nPlease reference the invoice number with your payment.'),
             height=100
         )
+
+        st.divider()
+        st.markdown("**Payment / Bank Details**")
+        st.caption("Shown on every invoice in the payment details section.")
+        bc1, bc2 = st.columns(2)
+        bank_name      = bc1.text_input("Bank name",       value=get_setting('bank_name', ''))
+        account_name   = bc2.text_input("Account name",    value=get_setting('account_name', ''))
+        bc3, bc4 = st.columns(2)
+        bsb            = bc3.text_input("BSB",             value=get_setting('bsb', ''))
+        account_number = bc4.text_input("Account number",  value=get_setting('account_number', ''))
 
         st.divider()
         st.markdown("**ABR Business Lookup**")
@@ -2204,6 +2156,8 @@ if page == 'settings':
             ('inv_format', inv_format), ('inv_prefix', inv_prefix),
             ('inv_next_num', str(int(inv_next_num))),
             ('abr_guid', abr_guid),
+            ('bank_name', bank_name), ('account_name', account_name),
+            ('bsb', bsb), ('account_number', account_number),
         ]:
             save_setting(key, val)
         st.success("Settings saved.")
