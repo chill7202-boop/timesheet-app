@@ -1,5 +1,5 @@
 import streamlit as st
-import duckdb
+import psycopg2
 import pandas as pd
 import uuid
 import re
@@ -8,256 +8,266 @@ from datetime import date, datetime
 
 st.set_page_config(page_title="Timesheet", page_icon="🕐", layout="wide")
 
-try:
-    _md_token = st.secrets.get("MOTHERDUCK_TOKEN", "").replace('\n', '').replace('\r', '').replace(' ', '').strip()
-except Exception:
-    _md_token = os.environ.get('MOTHERDUCK_TOKEN', '').strip()
 
-if _md_token:
-    DB_PATH = f"md:timesheet?motherduck_token={_md_token}"
-else:
-    DB_PATH = "timesheet.duckdb"
+def get_conn():
+    try:
+        db_url = st.secrets.get("DATABASE_URL", "")
+    except Exception:
+        db_url = ""
+    if not db_url:
+        db_url = os.environ.get("DATABASE_URL", "")
+    con = psycopg2.connect(db_url)
+    con.autocommit = True
+    return con
 
 
 def init_db():
-    con = duckdb.connect(DB_PATH)
-    con.execute("""
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS entries (
             id VARCHAR PRIMARY KEY,
             entry_date DATE,
             client VARCHAR,
             project VARCHAR,
             description VARCHAR,
-            hours DECIMAL(6,2),
-            rate DECIMAL(8,2)
+            hours NUMERIC(6,2),
+            rate NUMERIC(8,2),
+            employee VARCHAR DEFAULT 'Self',
+            status VARCHAR DEFAULT 'open'
         )
     """)
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key VARCHAR PRIMARY KEY,
-            value VARCHAR
+            value TEXT
         )
     """)
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS clients (
             id VARCHAR PRIMARY KEY,
             name VARCHAR,
             address VARCHAR,
             contact_name VARCHAR,
-            email VARCHAR
+            email VARCHAR,
+            billing_type VARCHAR DEFAULT 'hourly',
+            day_rate NUMERIC(8,2) DEFAULT 0,
+            website VARCHAR,
+            abn VARCHAR,
+            billable BOOLEAN DEFAULT TRUE
         )
     """)
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS employees (
             id VARCHAR PRIMARY KEY,
             name VARCHAR,
             email VARCHAR,
             role VARCHAR,
-            rate DECIMAL(8,2)
+            rate NUMERIC(8,2)
         )
     """)
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS projects (
-            id   VARCHAR PRIMARY KEY,
-            code VARCHAR,
-            name VARCHAR
+            id        VARCHAR PRIMARY KEY,
+            code      VARCHAR,
+            name      VARCHAR,
+            client_id VARCHAR
         )
     """)
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS invoices (
-            id            VARCHAR PRIMARY KEY,
+            id             VARCHAR PRIMARY KEY,
             invoice_number VARCHAR,
-            client        VARCHAR,
-            invoice_date  DATE,
-            subtotal      DECIMAL(10,2),
-            gst           DECIMAL(10,2),
-            total         DECIMAL(10,2),
-            billing_type  VARCHAR DEFAULT 'hourly',
-            invoice_type  VARCHAR DEFAULT 'timesheet',
-            paid          BOOLEAN DEFAULT FALSE,
-            paid_date     DATE
+            client         VARCHAR,
+            invoice_date   DATE,
+            subtotal       NUMERIC(10,2),
+            gst            NUMERIC(10,2),
+            total          NUMERIC(10,2),
+            billing_type   VARCHAR DEFAULT 'hourly',
+            invoice_type   VARCHAR DEFAULT 'timesheet',
+            paid           BOOLEAN DEFAULT FALSE,
+            paid_date      DATE,
+            html_content   TEXT
         )
     """)
-    con.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS adhoc_draft_lines (
             id          VARCHAR PRIMARY KEY,
             client      VARCHAR,
             description VARCHAR,
-            qty         DECIMAL(8,2),
-            unit_price  DECIMAL(10,2),
+            qty         NUMERIC(8,2),
+            unit_price  NUMERIC(10,2),
             sort_order  INTEGER DEFAULT 0
         )
     """)
-    # Migrations
-    for col in [
-        "ALTER TABLE entries ADD COLUMN employee VARCHAR DEFAULT 'Self'",
-        "ALTER TABLE entries ADD COLUMN status VARCHAR DEFAULT 'open'",
-        "ALTER TABLE clients ADD COLUMN billing_type VARCHAR DEFAULT 'hourly'",
-        "ALTER TABLE clients ADD COLUMN day_rate DECIMAL(8,2) DEFAULT 0",
-        "ALTER TABLE clients ADD COLUMN website VARCHAR",
-        "ALTER TABLE clients ADD COLUMN abn VARCHAR",
-        "ALTER TABLE projects ADD COLUMN client_id VARCHAR",
-        "ALTER TABLE clients ADD COLUMN billable BOOLEAN DEFAULT TRUE",
-        "ALTER TABLE invoices ADD COLUMN html_content VARCHAR",
-    ]:
-        try:
-            con.execute(col)
-        except Exception:
-            pass
-    # Migrate old submitted boolean → status
-    try:
-        con.execute("UPDATE entries SET status='submitted' WHERE submitted=true AND status='open'")
-    except Exception:
-        pass
-    # Rename old client name variants
-    try:
-        con.execute("UPDATE entries SET client='Airnavigator Group' WHERE client IN ('airnavigator.com', 'Airnavigator.com')")
-        con.execute("UPDATE clients SET name='Airnavigator Group' WHERE name IN ('airnavigator.com', 'Airnavigator.com')")
-    except Exception:
-        pass
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def get_employees():
-    con = duckdb.connect(DB_PATH)
-    df = con.execute("SELECT * FROM employees ORDER BY name").df()
+    con = get_conn()
+    df = pd.read_sql("SELECT * FROM employees ORDER BY name", con)
     con.close()
     return df.copy()
 
 
 def save_employee(emp_id, name, email, role, rate):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
+    cur = con.cursor()
     if emp_id:
-        con.execute(
-            "UPDATE employees SET name=?, email=?, role=?, rate=? WHERE id=?",
+        cur.execute(
+            "UPDATE employees SET name=%s, email=%s, role=%s, rate=%s WHERE id=%s",
             [name, email, role, rate, emp_id]
         )
     else:
-        con.execute(
-            "INSERT INTO employees VALUES (?, ?, ?, ?, ?)",
+        cur.execute(
+            "INSERT INTO employees VALUES (%s, %s, %s, %s, %s)",
             [str(uuid.uuid4()), name, email, role, rate]
         )
+    cur.close()
     con.close()
 
 
 def delete_employee(emp_id):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute("DELETE FROM employees WHERE id = ?", [emp_id])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM employees WHERE id = %s", [emp_id])
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def get_clients_list():
-    con = duckdb.connect(DB_PATH)
-    df = con.execute("SELECT * FROM clients ORDER BY name").df()
+    con = get_conn()
+    df = pd.read_sql("SELECT * FROM clients ORDER BY name", con)
     con.close()
     return df.copy()
 
 
 def save_client(client_id, name, address, contact_name, email, billing_type='hourly', day_rate=0, website='', billable=True):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
+    cur = con.cursor()
     if client_id:
-        con.execute(
-            "UPDATE clients SET name=?, address=?, contact_name=?, email=?, billing_type=?, day_rate=?, website=?, billable=? WHERE id=?",
+        cur.execute(
+            "UPDATE clients SET name=%s, address=%s, contact_name=%s, email=%s, billing_type=%s, day_rate=%s, website=%s, billable=%s WHERE id=%s",
             [name, address, contact_name, email, billing_type, day_rate, website, billable, client_id]
         )
     else:
-        con.execute(
-            "INSERT INTO clients (id,name,address,contact_name,email,billing_type,day_rate,website,billable) VALUES (?,?,?,?,?,?,?,?,?)",
+        cur.execute(
+            "INSERT INTO clients (id,name,address,contact_name,email,billing_type,day_rate,website,billable) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             [str(uuid.uuid4()), name, address, contact_name, email, billing_type, day_rate, website, billable]
         )
+    cur.close()
     con.close()
 
 
 def delete_client(client_id):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute("DELETE FROM clients WHERE id = ?", [client_id])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM clients WHERE id = %s", [client_id])
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def get_setting(key, default=''):
-    con = duckdb.connect(DB_PATH)
-    row = con.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("SELECT value FROM settings WHERE key = %s", [key])
+    row = cur.fetchone()
+    cur.close()
     con.close()
     return row[0] if row else default
 
 
 def save_setting(key, value):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", [key, value])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        [key, value]
+    )
+    cur.close()
     con.close()
 
 
 def add_entry(entry_date, client, project, description, hours, rate, employee='Self'):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute(
-        "INSERT INTO entries (id, entry_date, client, project, description, hours, rate, employee, status) VALUES (?,?,?,?,?,?,?,?,?)",
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO entries (id, entry_date, client, project, description, hours, rate, employee, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         [str(uuid.uuid4()), entry_date, client, project, description, hours, rate, employee, 'open']
     )
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def load_entries(client=None, project=None, from_date=None, to_date=None, employee=None, status=None):
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
     query = "SELECT * FROM entries WHERE 1=1"
     params = []
     if client:
-        query += " AND client = ?"
+        query += " AND client = %s"
         params.append(client)
     if project:
-        query += " AND project = ?"
+        query += " AND project = %s"
         params.append(project)
     if from_date:
-        query += " AND entry_date >= ?"
+        query += " AND entry_date >= %s"
         params.append(from_date)
     if to_date:
-        query += " AND entry_date <= ?"
+        query += " AND entry_date <= %s"
         params.append(to_date)
     if employee:
-        query += " AND employee = ?"
+        query += " AND employee = %s"
         params.append(employee)
     if status:
         if isinstance(status, list):
-            placeholders = ','.join(['?' for _ in status])
+            placeholders = ','.join(['%s' for _ in status])
             query += f" AND status IN ({placeholders})"
             params.extend(status)
         else:
-            query += " AND status = ?"
+            query += " AND status = %s"
             params.append(status)
     query += " ORDER BY entry_date DESC"
-    df = con.execute(query, params).df()
+    df = pd.read_sql(query, con, params=params)
     con.close()
     return df
 
 
 def delete_entry(entry_id):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute("DELETE FROM entries WHERE id = ?", [entry_id])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM entries WHERE id = %s", [entry_id])
+    cur.close()
     con.close()
 
 
 def set_status(entry_id, status):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute("UPDATE entries SET status = ? WHERE id = ?", [status, entry_id])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("UPDATE entries SET status = %s WHERE id = %s", [status, entry_id])
+    cur.close()
     con.close()
 
 
 def set_status_bulk(ids, status):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
+    cur = con.cursor()
     for i in ids:
-        con.execute("UPDATE entries SET status = ? WHERE id = ?", [status, i])
+        cur.execute("UPDATE entries SET status = %s WHERE id = %s", [status, i])
+    cur.close()
     con.close()
 
 
@@ -268,8 +278,11 @@ def get_next_invoice_number():
         num = int(get_setting('inv_next_num', '1') or 1)
         return f"{prefix}-{num:03d}"
     base = f"{prefix}-{datetime.now().strftime('%Y%m%d')}"
-    con = duckdb.connect(DB_PATH)
-    count = con.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE ?", [f"{base}%"]).fetchone()[0]
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE %s", [f"{base}%"])
+    count = cur.fetchone()[0]
+    cur.close()
     con.close()
     return base if count == 0 else f"{base}-{count + 1}"
 
@@ -283,41 +296,48 @@ def increment_invoice_number():
 
 def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet', html_content=''):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute(
-        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid,html_content) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid,html_content) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False, html_content]
     )
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def get_invoices(client=None):
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
     q = "SELECT * FROM invoices WHERE 1=1"
     p = []
     if client:
-        q += " AND client = ?"
+        q += " AND client = %s"
         p.append(client)
     q += " ORDER BY invoice_date DESC, invoice_number DESC"
-    df = con.execute(q, p).df()
+    df = pd.read_sql(q, con, params=p)
     con.close()
     return df
 
 
 def mark_invoice_paid(invoice_id, paid=True):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
+    cur = con.cursor()
     if paid:
-        con.execute("UPDATE invoices SET paid=TRUE,  paid_date=? WHERE id=?", [date.today(), invoice_id])
+        cur.execute("UPDATE invoices SET paid=TRUE, paid_date=%s WHERE id=%s", [date.today(), invoice_id])
     else:
-        con.execute("UPDATE invoices SET paid=FALSE, paid_date=NULL WHERE id=?", [invoice_id])
+        cur.execute("UPDATE invoices SET paid=FALSE, paid_date=NULL WHERE id=%s", [invoice_id])
+    cur.close()
     con.close()
 
 
 def invoice_number_exists(inv_number):
-    con = duckdb.connect(DB_PATH)
-    row = con.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number = ?", [inv_number]).fetchone()
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("SELECT COUNT(*) FROM invoices WHERE invoice_number = %s", [inv_number])
+    row = cur.fetchone()
+    cur.close()
     con.close()
     return row[0] > 0
 
@@ -325,128 +345,151 @@ def invoice_number_exists(inv_number):
 # ── Ad hoc draft line helpers ──────────────────────────────────────────────────
 
 def load_adhoc_lines(client):
-    con = duckdb.connect(DB_PATH)
-    rows = con.execute(
-        "SELECT id, description, qty, unit_price FROM adhoc_draft_lines WHERE client=? ORDER BY sort_order",
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "SELECT id, description, qty, unit_price FROM adhoc_draft_lines WHERE client=%s ORDER BY sort_order",
         [client]
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    cur.close()
     con.close()
     return [{'id': r[0], 'description': r[1], 'qty': float(r[2]), 'unit_price': float(r[3])} for r in rows]
 
 def add_adhoc_line(client, description, qty, unit_price):
-    con = duckdb.connect(DB_PATH)
-    max_order = con.execute(
-        "SELECT COALESCE(MAX(sort_order),0) FROM adhoc_draft_lines WHERE client=?", [client]
-    ).fetchone()[0]
-    con.execute(
-        "INSERT INTO adhoc_draft_lines (id, client, description, qty, unit_price, sort_order) VALUES (?,?,?,?,?,?)",
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "SELECT COALESCE(MAX(sort_order),0) FROM adhoc_draft_lines WHERE client=%s", [client]
+    )
+    max_order = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO adhoc_draft_lines (id, client, description, qty, unit_price, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
         [str(uuid.uuid4()), client, description, qty, unit_price, int(max_order) + 1]
     )
+    cur.close()
     con.close()
 
 def update_adhoc_line(line_id, description, qty, unit_price):
-    con = duckdb.connect(DB_PATH)
-    con.execute(
-        "UPDATE adhoc_draft_lines SET description=?, qty=?, unit_price=? WHERE id=?",
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE adhoc_draft_lines SET description=%s, qty=%s, unit_price=%s WHERE id=%s",
         [description, qty, unit_price, line_id]
     )
+    cur.close()
     con.close()
 
 def delete_adhoc_line(line_id):
-    con = duckdb.connect(DB_PATH)
-    con.execute("DELETE FROM adhoc_draft_lines WHERE id=?", [line_id])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM adhoc_draft_lines WHERE id=%s", [line_id])
+    cur.close()
     con.close()
 
 def clear_adhoc_lines(client):
-    con = duckdb.connect(DB_PATH)
-    con.execute("DELETE FROM adhoc_draft_lines WHERE client=?", [client])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM adhoc_draft_lines WHERE client=%s", [client])
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def get_clients():
-    con = duckdb.connect(DB_PATH)
-    rows = con.execute("SELECT DISTINCT client FROM entries ORDER BY client").fetchall()
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("SELECT DISTINCT client FROM entries ORDER BY client")
+    rows = cur.fetchall()
+    cur.close()
     con.close()
     return [r[0] for r in rows]
 
 
 @st.cache_data(ttl=60)
 def get_projects(client=None):
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
+    cur = con.cursor()
     if client:
-        rows = con.execute(
-            "SELECT DISTINCT project FROM entries WHERE client = ? ORDER BY project", [client]
-        ).fetchall()
+        cur.execute("SELECT DISTINCT project FROM entries WHERE client = %s ORDER BY project", [client])
     else:
-        rows = con.execute("SELECT DISTINCT project FROM entries ORDER BY project").fetchall()
+        cur.execute("SELECT DISTINCT project FROM entries ORDER BY project")
+    rows = cur.fetchall()
+    cur.close()
     con.close()
     return [r[0] for r in rows]
 
 
 @st.cache_data(ttl=60)
 def get_projects_list(client_id=None):
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
     if client_id:
-        df = con.execute("SELECT * FROM projects WHERE client_id=? ORDER BY code, name", [client_id]).df()
+        df = pd.read_sql("SELECT * FROM projects WHERE client_id=%s ORDER BY code, name", con, params=[client_id])
     else:
-        df = con.execute("SELECT * FROM projects ORDER BY code, name").df()
+        df = pd.read_sql("SELECT * FROM projects ORDER BY code, name", con)
     con.close()
     return df
 
 
 def save_project(project_id, code, name, client_id=None):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
+    cur = con.cursor()
     if project_id:
-        con.execute("UPDATE projects SET code=?, name=?, client_id=? WHERE id=?", [code, name, client_id, project_id])
+        cur.execute("UPDATE projects SET code=%s, name=%s, client_id=%s WHERE id=%s", [code, name, client_id, project_id])
     else:
-        con.execute("INSERT INTO projects VALUES (?, ?, ?, ?)", [str(uuid.uuid4()), code, name, client_id])
+        cur.execute("INSERT INTO projects VALUES (%s, %s, %s, %s)", [str(uuid.uuid4()), code, name, client_id])
+    cur.close()
     con.close()
 
 
 def delete_project(project_id):
     st.cache_data.clear()
-    con = duckdb.connect(DB_PATH)
-    con.execute("DELETE FROM projects WHERE id=?", [project_id])
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM projects WHERE id=%s", [project_id])
+    cur.close()
     con.close()
 
 
 @st.cache_data(ttl=60)
 def get_dashboard_data():
-    con = duckdb.connect(DB_PATH)
+    con = get_conn()
     today = date.today()
     yr, mo = today.year, today.month
     three_months_ago = (today.replace(day=1) - pd.DateOffset(months=3)).date()
 
-    revenue = con.execute("""
+    cur = con.cursor()
+    cur.execute("""
         SELECT
-            COALESCE(SUM(total), 0)                              AS total_invoiced,
-            COALESCE(SUM(CASE WHEN paid THEN total ELSE 0 END), 0) AS paid,
-            COALESCE(SUM(CASE WHEN NOT paid THEN total ELSE 0 END),0) AS outstanding
+            COALESCE(SUM(total), 0),
+            COALESCE(SUM(CASE WHEN paid THEN total ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN NOT paid THEN total ELSE 0 END), 0)
         FROM invoices
-        WHERE year(invoice_date)=? AND month(invoice_date)=?
-    """, [yr, mo]).fetchone()
+        WHERE EXTRACT(YEAR FROM invoice_date)=%s AND EXTRACT(MONTH FROM invoice_date)=%s
+    """, [yr, mo])
+    revenue = cur.fetchone()
+    cur.close()
 
-    hours = con.execute("""
+    hours = pd.read_sql("""
         SELECT client, ROUND(SUM(hours),2) AS hours
         FROM entries
-        WHERE year(entry_date)=? AND month(entry_date)=?
+        WHERE EXTRACT(YEAR FROM entry_date)=%s AND EXTRACT(MONTH FROM entry_date)=%s
         GROUP BY client ORDER BY hours DESC
-    """, [yr, mo]).df()
+    """, con, params=[yr, mo])
 
-    unpaid = con.execute("""
+    unpaid = pd.read_sql("""
         SELECT client, invoice_number, invoice_date, total
         FROM invoices WHERE paid=FALSE
         ORDER BY invoice_date
-    """).df()
+    """, con)
 
-    top_clients = con.execute("""
+    top_clients = pd.read_sql("""
         SELECT client, ROUND(SUM(total),2) AS revenue
         FROM invoices
-        WHERE invoice_date >= ?
+        WHERE invoice_date >= %s
         GROUP BY client ORDER BY revenue DESC LIMIT 10
-    """, [three_months_ago]).df()
+    """, con, params=[three_months_ago])
 
     con.close()
     return revenue, hours.copy(), unpaid.copy(), top_clients.copy()
@@ -1208,16 +1251,19 @@ if page == 'timesheet':
 
             bc1, bc2, bc3 = st.columns(3)
             if bc1.button("Save Changes", key="save_open"):
-                con = duckdb.connect(DB_PATH)
+                con = get_conn()
+                cur = con.cursor()
                 ids = open_df['id'].tolist()
                 for i, row in edited.iterrows():
                     if i < len(ids):
-                        con.execute("""
-                            UPDATE entries SET entry_date=?, employee=?, client=?, project=?,
-                            description=?, hours=?, rate=? WHERE id=?
+                        cur.execute("""
+                            UPDATE entries SET entry_date=%s, employee=%s, client=%s, project=%s,
+                            description=%s, hours=%s, rate=%s WHERE id=%s
                         """, [row['Date'], row['Employee'], row['Client'], row['Project'],
                               row['Description'], row['Hours'], row['Rate ($)'], ids[i]])
+                cur.close()
                 con.close()
+                st.cache_data.clear()
                 st.success("Saved.")
                 st.rerun()
             if bc2.button("Submit Selected", type="primary", key="submit_selected",
@@ -2193,12 +2239,15 @@ if page == 'settings':
             st.error(f"Are you sure you want to delete {labels[confirm]}?")
             yes, no = st.columns(2)
             if yes.button("Yes, delete", type="primary", use_container_width=True):
-                con = duckdb.connect(DB_PATH)
+                con = get_conn()
+                cur = con.cursor()
                 if confirm in ('entries', 'all'):
-                    con.execute("DELETE FROM entries")
+                    cur.execute("DELETE FROM entries")
                 if confirm in ('invoices', 'all'):
-                    con.execute("DELETE FROM invoices")
+                    cur.execute("DELETE FROM invoices")
+                cur.close()
                 con.close()
+                st.cache_data.clear()
                 st.session_state.pop('confirm_clear', None)
                 st.success("Done.")
                 st.rerun()
