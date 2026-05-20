@@ -477,34 +477,47 @@ def get_dashboard_data():
         SELECT
             COALESCE(SUM(total), 0),
             COALESCE(SUM(CASE WHEN paid THEN total ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN NOT paid THEN total ELSE 0 END), 0)
+            COALESCE(SUM(CASE WHEN NOT paid THEN total ELSE 0 END), 0),
+            (
+                SELECT COALESCE(json_agg(h), '[]'::json)
+                FROM (
+                    SELECT client, ROUND(SUM(hours),2) AS hours
+                    FROM entries
+                    WHERE EXTRACT(YEAR FROM entry_date)=%s AND EXTRACT(MONTH FROM entry_date)=%s
+                    GROUP BY client ORDER BY hours DESC
+                ) h
+            ),
+            (
+                SELECT COALESCE(json_agg(u ORDER BY u.invoice_date), '[]'::json)
+                FROM (
+                    SELECT client, invoice_number, invoice_date::text, total
+                    FROM invoices WHERE paid=FALSE
+                ) u
+            ),
+            (
+                SELECT COALESCE(json_agg(t), '[]'::json)
+                FROM (
+                    SELECT client, ROUND(SUM(total),2) AS revenue
+                    FROM invoices WHERE invoice_date >= %s
+                    GROUP BY client ORDER BY revenue DESC LIMIT 10
+                ) t
+            )
         FROM invoices
         WHERE EXTRACT(YEAR FROM invoice_date)=%s AND EXTRACT(MONTH FROM invoice_date)=%s
-    """, [yr, mo])
-    revenue = cur.fetchone()
+    """, [yr, mo, three_months_ago, yr, mo])
+
+    row = cur.fetchone()
     cur.close()
-
-    hours = pd.read_sql("""
-        SELECT client, ROUND(SUM(hours),2) AS hours
-        FROM entries
-        WHERE EXTRACT(YEAR FROM entry_date)=%s AND EXTRACT(MONTH FROM entry_date)=%s
-        GROUP BY client ORDER BY hours DESC
-    """, con, params=[yr, mo])
-
-    unpaid = pd.read_sql("""
-        SELECT client, invoice_number, invoice_date, total
-        FROM invoices WHERE paid=FALSE
-        ORDER BY invoice_date
-    """, con)
-
-    top_clients = pd.read_sql("""
-        SELECT client, ROUND(SUM(total),2) AS revenue
-        FROM invoices
-        WHERE invoice_date >= %s
-        GROUP BY client ORDER BY revenue DESC LIMIT 10
-    """, con, params=[three_months_ago])
-
     release_conn(con)
+
+    revenue = (row[0], row[1], row[2])
+    hours      = pd.DataFrame(row[3] or [])
+    unpaid     = pd.DataFrame(row[4] or [])
+    top_clients = pd.DataFrame(row[5] or [])
+
+    if not unpaid.empty and 'invoice_date' in unpaid.columns:
+        unpaid['invoice_date'] = pd.to_datetime(unpaid['invoice_date'])
+
     return revenue, hours.copy(), unpaid.copy(), top_clients.copy()
 
 
