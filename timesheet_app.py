@@ -98,6 +98,7 @@ def init_db():
         "ALTER TABLE clients ADD COLUMN abn VARCHAR",
         "ALTER TABLE projects ADD COLUMN client_id VARCHAR",
         "ALTER TABLE clients ADD COLUMN billable BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE invoices ADD COLUMN html_content VARCHAR",
     ]:
         try:
             con.execute(col)
@@ -280,12 +281,12 @@ def increment_invoice_number():
         save_setting('inv_next_num', str(num + 1))
 
 
-def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet'):
+def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet', html_content=''):
     st.cache_data.clear()
     con = duckdb.connect(DB_PATH)
     con.execute(
-        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False]
+        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid,html_content) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False, html_content]
     )
     con.close()
 
@@ -1662,7 +1663,8 @@ if page == 'invoice':
                             save_invoice(inv_data['inv_number'], inv_data['client'],
                                          inv_data.get('subtotal', inv_data['total']),
                                          inv_data.get('gst', 0), inv_data['total'],
-                                         inv_data.get('billing_type', 'hourly'), 'timesheet')
+                                         inv_data.get('billing_type', 'hourly'), 'timesheet',
+                                         html_content=inv_data.get('html', ''))
                             st.session_state.pop('generated_invoice', None)
                             go('statements')
                             st.rerun()
@@ -1680,7 +1682,8 @@ if page == 'invoice':
                             save_invoice(inv_data['inv_number'], inv_data['client'],
                                          inv_data.get('subtotal', inv_data['total']),
                                          inv_data.get('gst', 0), inv_data['total'],
-                                         'fixed', 'fixed')
+                                         'fixed', 'fixed',
+                                         html_content=inv_data.get('html', ''))
                             increment_invoice_number()
                             if mark_approved and not _approved_entries.empty:
                                 set_status_bulk(_approved_entries['id'].tolist(), 'invoiced')
@@ -2274,13 +2277,14 @@ if page == 'statements':
             )
 
             # Column headers
-            h1, h2, h3, h4, h5, h6 = st.columns([1.8, 2.2, 1.4, 1.2, 1.6, 1.8])
+            h1, h2, h3, h4, h5, h6, h7 = st.columns([1.6, 2.0, 1.3, 1.1, 1.5, 1.4, 1.6])
             h1.caption("Invoice #")
             h2.caption("Client")
             h3.caption("Date")
             h4.caption("Age")
             h5.caption("Amount")
             h6.caption("")
+            h7.caption("")
 
             for _, row in outstanding.iterrows():
                 inv_date = pd.to_datetime(row['invoice_date'])
@@ -2292,13 +2296,17 @@ if page == 'statements':
                 else:
                     age_str = f"{days}d"
 
-                c1, c2, c3, c4, c5, c6 = st.columns([1.8, 2.2, 1.4, 1.2, 1.6, 1.8])
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.6, 2.0, 1.3, 1.1, 1.5, 1.4, 1.6])
                 c1.write(f"**{row['invoice_number']}**")
                 c2.write(row['client'])
                 c3.write(inv_date.strftime('%d/%m/%Y'))
                 c4.write(age_str)
                 c5.write(f"**${float(row['total']):,.2f}**")
-                if c6.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
+                _html = row.get('html_content') or ''
+                if _html:
+                    c6.download_button("⬇ Reprint", _html, f"{row['invoice_number']}.html", "text/html",
+                                       key=f"reprint_{row['id']}", use_container_width=True)
+                if c7.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
                     mark_invoice_paid(row['id'], paid=True)
                     st.rerun()
 
@@ -2311,23 +2319,28 @@ if page == 'statements':
             with st.expander(
                 f"✅ Paid — {len(paid)} invoice{'s' if len(paid)!=1 else ''} · ${paid_total:,.2f}"
             ):
-                h1, h2, h3, h4, h5, h6 = st.columns([1.8, 2.2, 1.4, 1.4, 1.6, 1.6])
+                h1, h2, h3, h4, h5, h6, h7 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.4, 1.4])
                 h1.caption("Invoice #")
                 h2.caption("Client")
                 h3.caption("Invoiced")
                 h4.caption("Paid on")
                 h5.caption("Amount")
                 h6.caption("")
+                h7.caption("")
 
                 for _, row in paid.iterrows():
-                    c1, c2, c3, c4, c5, c6 = st.columns([1.8, 2.2, 1.4, 1.4, 1.6, 1.6])
+                    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.4, 1.4])
                     c1.write(f"**{row['invoice_number']}**")
                     c2.write(row['client'])
                     c3.write(pd.to_datetime(row['invoice_date']).strftime('%d/%m/%Y'))
                     paid_on = pd.to_datetime(row['paid_date']).strftime('%d/%m/%Y') if pd.notna(row['paid_date']) else '—'
                     c4.write(paid_on)
                     c5.write(f"${float(row['total']):,.2f}")
-                    if c6.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
+                    _html = row.get('html_content') or ''
+                    if _html:
+                        c6.download_button("⬇ Reprint", _html, f"{row['invoice_number']}.html", "text/html",
+                                           key=f"reprint_{row['id']}", use_container_width=True)
+                    if c7.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
                         mark_invoice_paid(row['id'], paid=False)
                         st.rerun()
 
