@@ -117,7 +117,7 @@ def init_db():
     release_conn(con)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_employees():
     con = get_conn()
     df = pd.read_sql("SELECT * FROM employees ORDER BY name", con)
@@ -152,7 +152,7 @@ def delete_employee(emp_id):
     release_conn(con)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_clients_list():
     con = get_conn()
     df = pd.read_sql("SELECT * FROM clients ORDER BY name", con)
@@ -187,7 +187,7 @@ def delete_client(client_id):
     release_conn(con)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_setting(key, default=''):
     con = get_conn()
     cur = con.cursor()
@@ -408,7 +408,7 @@ def clear_adhoc_lines(client):
     release_conn(con)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_clients():
     con = get_conn()
     cur = con.cursor()
@@ -419,7 +419,7 @@ def get_clients():
     return [r[0] for r in rows]
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_projects(client=None):
     con = get_conn()
     cur = con.cursor()
@@ -433,7 +433,7 @@ def get_projects(client=None):
     return [r[0] for r in rows]
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_projects_list(client_id=None):
     con = get_conn()
     if client_id:
