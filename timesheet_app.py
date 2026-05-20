@@ -715,14 +715,15 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
   /* Sender strip */
   .sender-strip {{
     display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: flex-start;
     padding: 14px 48px;
     border-bottom: 1px solid #E5E7EB;
     font-size: 12px;
     color: #6B7280;
-    gap: 32px;
+    gap: 2px;
   }}
-  .sender-strip strong {{ color: #0D1B2A; font-weight: 600; }}
+  .sender-strip strong {{ color: #0D1B2A; font-weight: 600; font-size: 14px; }}
 
   /* Table */
   .table-wrap {{ padding: 0 48px; }}
@@ -845,7 +846,6 @@ def generate_invoice_html(entries_df, settings, invoice_number, include_gst, pay
         <tr><td>Due Date</td><td>{due_date_str}</td></tr>
         {period_row}
       </table>
-      <div><span class="status-badge">UNPAID</span></div>
     </div>
   </div>
 
