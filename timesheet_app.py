@@ -1093,7 +1093,7 @@ if page == 'home':
         ("👥", "Clients",    'clients',    False),
         ("📁", "Projects",   'projects',   False),
         ("👤", "Employees",  'employees',  False),
-        ("💹", "Profitability", 'profitability', False),
+        ("💰", "Profitability", 'profitability', False),
         ("📄", "Statements", 'statements', False),
         ("⚙️", "Settings",  'settings',   False),
         ("🔒", "Log Out",    'logout',     False),
