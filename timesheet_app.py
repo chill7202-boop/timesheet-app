@@ -47,7 +47,8 @@ def init_db():
             hours NUMERIC(6,2),
             rate NUMERIC(8,2),
             employee VARCHAR DEFAULT 'Self',
-            status VARCHAR DEFAULT 'open'
+            status VARCHAR DEFAULT 'open',
+            cost_rate NUMERIC(8,2) DEFAULT 0
         )
     """)
     cur.execute("""
@@ -76,7 +77,8 @@ def init_db():
             name VARCHAR,
             email VARCHAR,
             role VARCHAR,
-            rate NUMERIC(8,2)
+            rate NUMERIC(8,2),
+            cost_rate NUMERIC(8,2) DEFAULT 0
         )
     """)
     cur.execute("""
@@ -113,6 +115,14 @@ def init_db():
             sort_order  INTEGER DEFAULT 0
         )
     """)
+    for stmt in [
+        "ALTER TABLE employees ADD COLUMN IF NOT EXISTS cost_rate NUMERIC(8,2) DEFAULT 0",
+        "ALTER TABLE entries ADD COLUMN IF NOT EXISTS cost_rate NUMERIC(8,2) DEFAULT 0",
+    ]:
+        try:
+            cur.execute(stmt)
+        except Exception:
+            pass
     cur.close()
     release_conn(con)
 
@@ -125,19 +135,19 @@ def get_employees():
     return df.copy()
 
 
-def save_employee(emp_id, name, email, role, rate):
+def save_employee(emp_id, name, email, role, rate, cost_rate=0):
     st.cache_data.clear()
     con = get_conn()
     cur = con.cursor()
     if emp_id:
         cur.execute(
-            "UPDATE employees SET name=%s, email=%s, role=%s, rate=%s WHERE id=%s",
-            [name, email, role, rate, emp_id]
+            "UPDATE employees SET name=%s, email=%s, role=%s, rate=%s, cost_rate=%s WHERE id=%s",
+            [name, email, role, rate, cost_rate, emp_id]
         )
     else:
         cur.execute(
-            "INSERT INTO employees VALUES (%s, %s, %s, %s, %s)",
-            [str(uuid.uuid4()), name, email, role, rate]
+            "INSERT INTO employees (id, name, email, role, rate, cost_rate) VALUES (%s,%s,%s,%s,%s,%s)",
+            [str(uuid.uuid4()), name, email, role, rate, cost_rate]
         )
     cur.close()
     release_conn(con)
@@ -210,13 +220,13 @@ def save_setting(key, value):
     release_conn(con)
 
 
-def add_entry(entry_date, client, project, description, hours, rate, employee='Self'):
+def add_entry(entry_date, client, project, description, hours, rate, employee='Self', cost_rate=0):
     st.cache_data.clear()
     con = get_conn()
     cur = con.cursor()
     cur.execute(
-        "INSERT INTO entries (id, entry_date, client, project, description, hours, rate, employee, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-        [str(uuid.uuid4()), entry_date, client, project, description, hours, rate, employee, 'open']
+        "INSERT INTO entries (id, entry_date, client, project, description, hours, rate, employee, status, cost_rate) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        [str(uuid.uuid4()), entry_date, client, project, description, hours, rate, employee, 'open', cost_rate]
     )
     cur.close()
     release_conn(con)
@@ -1083,6 +1093,7 @@ if page == 'home':
         ("👥", "Clients",    'clients',    False),
         ("📁", "Projects",   'projects',   False),
         ("👤", "Employees",  'employees',  False),
+        ("💹", "Profitability", 'profitability', False),
         ("📄", "Statements", 'statements', False),
         ("⚙️", "Settings",  'settings',   False),
         ("🔒", "Log Out",    'logout',     False),
@@ -1144,8 +1155,11 @@ if page == 'log':
             else:
                 employee = ec1.selectbox("Employee", emp_options, key="log_employee")
                 emp_row = emp_df[emp_df['name'] == employee]
-                if not emp_row.empty and float(emp_row.iloc[0]['rate'] or 0) > 0:
-                    rate_default = float(emp_row.iloc[0]['rate'])
+                emp_cost_rate = 0.0
+                if not emp_row.empty:
+                    if float(emp_row.iloc[0]['rate'] or 0) > 0:
+                        rate_default = float(emp_row.iloc[0]['rate'])
+                    emp_cost_rate = float(emp_row.iloc[0].get('cost_rate') or 0)
 
             # Force rate to update when employee changes by writing to session_state first
             if st.session_state.get('_log_employee_prev') != employee:
@@ -1187,7 +1201,7 @@ if page == 'log':
                 elif hours <= 0:
                     st.error("Hours must be greater than 0.")
                 else:
-                    add_entry(entry_date, selected_client, project.strip(), description.strip(), hours, rate_used, employee)
+                    add_entry(entry_date, selected_client, project.strip(), description.strip(), hours, rate_used, employee, emp_cost_rate)
                     st.success(f"Saved {hours:.2f}h on {project} for {selected_client} — {employee}")
 
 # ── Timesheet ─────────────────────────────────────────────────────────────────
@@ -2038,26 +2052,29 @@ if page == 'employees':
                     row = row.iloc[0]
                     f_name, f_email = row['name'], row['email'] or ''
                     f_role, f_rate  = row['role'] or '', float(row['rate'] or 0)
+                    f_cost_rate     = float(row.get('cost_rate') or 0)
                 else:
                     editing = None
                     f_name = f_email = f_role = ''
-                    f_rate = 0.0
+                    f_rate = f_cost_rate = 0.0
             else:
                 f_name = f_email = f_role = ''
-                f_rate = 0.0
+                f_rate = f_cost_rate = 0.0
 
             with st.form("emp_form", clear_on_submit=True):
                 e_name  = st.text_input("Full name",  value=f_name)
                 e_email = st.text_input("Email",      value=f_email)
                 e_role  = st.text_input("Role / title", value=f_role)
-                e_rate  = st.number_input("Hourly rate ($)", min_value=0.0, step=5.0, value=f_rate)
+                rc1, rc2 = st.columns(2)
+                e_rate      = rc1.number_input("Billing rate ($/hr)", min_value=0.0, step=5.0, value=f_rate)
+                e_cost_rate = rc2.number_input("Cost rate ($/hr)",    min_value=0.0, step=5.0, value=f_cost_rate)
                 save_btn = st.form_submit_button("Save Employee", type="primary", use_container_width=True)
 
             if save_btn:
                 if not e_name:
                     st.error("Name is required.")
                 else:
-                    save_employee(editing, e_name.strip(), e_email.strip(), e_role.strip(), e_rate)
+                    save_employee(editing, e_name.strip(), e_email.strip(), e_role.strip(), e_rate, e_cost_rate)
                     st.session_state.pop('editing_employee', None)
                     st.success(f"{'Updated' if editing else 'Saved'}: {e_name}")
                     st.rerun()
@@ -2424,6 +2441,99 @@ if page == 'statements':
         export = view_df[['invoice_number','client','invoice_date','invoice_type','subtotal','gst','total','paid','paid_date']].copy()
         export.columns = ['Invoice #','Client','Date','Type','Subtotal','GST','Total','Paid','Paid Date']
         st.download_button("⬇ Export to CSV", export.to_csv(index=False), "statements.csv", "text/csv")
+
+# ── Profitability ─────────────────────────────────────────────────────────────
+
+if page == 'profitability':
+    back_button()
+    st.subheader("Project Profitability")
+
+    con = get_conn()
+    entries_df = pd.read_sql("""
+        SELECT client, project, employee,
+               SUM(hours) AS hours,
+               SUM(hours * rate) AS revenue,
+               SUM(hours * cost_rate) AS cost
+        FROM entries
+        WHERE status != 'open' OR status IS NULL
+        GROUP BY client, project, employee
+        ORDER BY client, project
+    """, con)
+
+    invoices_df = pd.read_sql("""
+        SELECT client, SUM(total) AS invoiced
+        FROM invoices
+        GROUP BY client
+    """, con)
+    release_conn(con)
+
+    if entries_df.empty:
+        st.info("No time entries found. Log time and mark entries as submitted to see profitability.")
+    else:
+        entries_df['hours']   = entries_df['hours'].astype(float)
+        entries_df['revenue'] = entries_df['revenue'].astype(float)
+        entries_df['cost']    = entries_df['cost'].astype(float)
+        entries_df['margin']  = entries_df['revenue'] - entries_df['cost']
+
+        # ── By Client ──────────────────────────────────────────────────────────
+        st.markdown("#### By Client")
+        client_summary = entries_df.groupby('client').agg(
+            Hours=('hours', 'sum'),
+            Revenue=('revenue', 'sum'),
+            Cost=('cost', 'sum'),
+            Margin=('margin', 'sum'),
+        ).reset_index()
+        client_summary['Margin %'] = (client_summary['Margin'] / client_summary['Revenue'].replace(0, 1) * 100).round(1)
+
+        h1, h2, h3, h4, h5, h6 = st.columns([2.5, 1.2, 1.5, 1.5, 1.5, 1.2])
+        h1.caption("Client"); h2.caption("Hours"); h3.caption("Revenue"); h4.caption("Cost"); h5.caption("Margin"); h6.caption("Margin %")
+
+        for _, row in client_summary.iterrows():
+            c1, c2, c3, c4, c5, c6 = st.columns([2.5, 1.2, 1.5, 1.5, 1.5, 1.2])
+            c1.write(f"**{row['client']}**")
+            c2.write(f"{row['Hours']:.1f}h")
+            c3.write(f"${row['Revenue']:,.2f}")
+            c4.write(f"${row['Cost']:,.2f}")
+            margin_color = "green" if row['Margin'] >= 0 else "red"
+            c5.markdown(f"<span style='color:{margin_color}'>**${row['Margin']:,.2f}**</span>", unsafe_allow_html=True)
+            c6.write(f"{row['Margin %']}%")
+
+        st.divider()
+
+        # ── By Project ─────────────────────────────────────────────────────────
+        st.markdown("#### By Project")
+        project_summary = entries_df.groupby(['client', 'project']).agg(
+            Hours=('hours', 'sum'),
+            Revenue=('revenue', 'sum'),
+            Cost=('cost', 'sum'),
+            Margin=('margin', 'sum'),
+        ).reset_index()
+        project_summary['Margin %'] = (project_summary['Margin'] / project_summary['Revenue'].replace(0, 1) * 100).round(1)
+
+        filter_client = st.selectbox("Filter by client", ['All'] + sorted(project_summary['client'].unique().tolist()), key='prof_client')
+        if filter_client != 'All':
+            project_summary = project_summary[project_summary['client'] == filter_client]
+
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([2, 2, 1.2, 1.5, 1.5, 1.5, 1.2])
+        h1.caption("Client"); h2.caption("Project"); h3.caption("Hours"); h4.caption("Revenue"); h5.caption("Cost"); h6.caption("Margin"); h7.caption("Margin %")
+
+        for _, row in project_summary.iterrows():
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([2, 2, 1.2, 1.5, 1.5, 1.5, 1.2])
+            c1.write(row['client'])
+            c2.write(f"**{row['project']}**")
+            c3.write(f"{row['Hours']:.1f}h")
+            c4.write(f"${row['Revenue']:,.2f}")
+            c5.write(f"${row['Cost']:,.2f}")
+            margin_color = "green" if row['Margin'] >= 0 else "red"
+            c6.markdown(f"<span style='color:{margin_color}'>**${row['Margin']:,.2f}**</span>", unsafe_allow_html=True)
+            c7.write(f"{row['Margin %']}%")
+
+        st.divider()
+        st.download_button(
+            "⬇ Export to CSV",
+            project_summary.to_csv(index=False),
+            "profitability.csv", "text/csv"
+        )
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
