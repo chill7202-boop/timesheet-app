@@ -1444,7 +1444,7 @@ if page == 'invoice':
                 .reset_index()
             )
             st.caption(f"{len(pending_clients)} client{'s' if len(pending_clients) != 1 else ''} with approved entries ready to invoice")
-            pcols = st.columns(min(len(pending_clients), 4))
+            pcols = st.columns(min(max(len(pending_clients), 1), 4))
             for col, (_, row) in zip(pcols, pending_clients.iterrows()):
                 with col:
                     if st.button(
@@ -2394,9 +2394,9 @@ if page == 'statements':
                 c3.write(inv_date.strftime('%d/%m/%Y'))
                 c4.write(age_str)
                 c5.write(f"**${float(row['total']):,.2f}**")
-                _html = row.get('html_content') or ''
+                _html = str(row.get('html_content') or '')
                 if _html:
-                    c6.download_button("⬇ Reprint", _html, f"{row['invoice_number']}.html", "text/html",
+                    c6.download_button("⬇ Reprint", _html.encode('utf-8'), f"{row['invoice_number']}.html", "text/html",
                                        key=f"reprint_{row['id']}", use_container_width=True)
                 if c7.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
                     mark_invoice_paid(row['id'], paid=True)
@@ -2428,9 +2428,9 @@ if page == 'statements':
                     paid_on = pd.to_datetime(row['paid_date']).strftime('%d/%m/%Y') if pd.notna(row['paid_date']) else '—'
                     c4.write(paid_on)
                     c5.write(f"${float(row['total']):,.2f}")
-                    _html = row.get('html_content') or ''
+                    _html = str(row.get('html_content') or '')
                     if _html:
-                        c6.download_button("⬇ Reprint", _html, f"{row['invoice_number']}.html", "text/html",
+                        c6.download_button("⬇ Reprint", _html.encode('utf-8'), f"{row['invoice_number']}.html", "text/html",
                                            key=f"reprint_{row['id']}", use_container_width=True)
                     if c7.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
                         mark_invoice_paid(row['id'], paid=False)
