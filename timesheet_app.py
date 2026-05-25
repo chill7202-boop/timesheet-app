@@ -115,10 +115,24 @@ def init_db():
             sort_order  INTEGER DEFAULT 0
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_lines (
+            id           VARCHAR PRIMARY KEY,
+            invoice_number VARCHAR NOT NULL,
+            description  VARCHAR,
+            qty          NUMERIC(8,2) DEFAULT 1,
+            unit_price   NUMERIC(10,2) DEFAULT 0,
+            sort_order   INTEGER DEFAULT 0
+        )
+    """)
     for stmt in [
         "ALTER TABLE employees ADD COLUMN IF NOT EXISTS cost_rate NUMERIC(8,2) DEFAULT 0",
         "ALTER TABLE entries ADD COLUMN IF NOT EXISTS cost_rate NUMERIC(8,2) DEFAULT 0",
         "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS description VARCHAR",
+        "ALTER TABLE entries ADD COLUMN IF NOT EXISTS invoice_number VARCHAR",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS include_gst BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS due_date DATE",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS period_end DATE",
     ]:
         try:
             cur.execute(stmt)
@@ -318,13 +332,13 @@ def increment_invoice_number():
         save_setting('inv_next_num', str(num + 1))
 
 
-def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet', html_content=''):
+def save_invoice(invoice_number, client, subtotal, gst, total, billing_type='hourly', invoice_type='timesheet', html_content='', include_gst=True, due_date=None, period_end=None):
     st.cache_data.clear()
     con = get_conn()
     cur = con.cursor()
     cur.execute(
-        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid,html_content) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-        [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False, html_content]
+        "INSERT INTO invoices (id,invoice_number,client,invoice_date,subtotal,gst,total,billing_type,invoice_type,paid,html_content,include_gst,due_date,period_end) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        [str(uuid.uuid4()), invoice_number, client, date.today(), subtotal, gst, total, billing_type, invoice_type, False, html_content, include_gst, due_date, period_end]
     )
     cur.close()
     release_conn(con)
@@ -361,6 +375,154 @@ def update_invoice_description(invoice_id, description):
     con = get_conn()
     cur = con.cursor()
     cur.execute("UPDATE invoices SET description=%s WHERE id=%s", [description, invoice_id])
+    cur.close()
+    release_conn(con)
+
+
+def stamp_invoice_number(ids, invoice_number):
+    con = get_conn()
+    cur = con.cursor()
+    for i in ids:
+        cur.execute("UPDATE entries SET invoice_number=%s WHERE id=%s", [invoice_number, i])
+    cur.close()
+    release_conn(con)
+
+
+def save_invoice_lines(invoice_number, lines):
+    con = get_conn()
+    cur = con.cursor()
+    for i, line in enumerate(lines):
+        cur.execute(
+            "INSERT INTO invoice_lines (id, invoice_number, description, qty, unit_price, sort_order) VALUES (%s,%s,%s,%s,%s,%s)",
+            [str(uuid.uuid4()), invoice_number, line.get('description', ''), line.get('qty', 1), line.get('unit_price', 0), i]
+        )
+    cur.close()
+    release_conn(con)
+
+
+def load_invoice_entries(invoice_number):
+    con = get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM entries WHERE invoice_number=%s ORDER BY entry_date",
+        con, params=[invoice_number]
+    )
+    release_conn(con)
+    return df
+
+
+def load_invoice_lines_saved(invoice_number):
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "SELECT id, description, qty, unit_price FROM invoice_lines WHERE invoice_number=%s ORDER BY sort_order",
+        [invoice_number]
+    )
+    rows = cur.fetchall()
+    cur.close()
+    release_conn(con)
+    return [{'id': r[0], 'description': r[1] or '', 'qty': float(r[2]), 'unit_price': float(r[3])} for r in rows]
+
+
+def update_entry_invoice_fields(entry_id, description, hours, rate):
+    st.cache_data.clear()
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE entries SET description=%s, hours=%s, rate=%s WHERE id=%s",
+        [description, hours, rate, entry_id]
+    )
+    cur.close()
+    release_conn(con)
+
+
+def update_invoice_line_saved(line_id, description, qty, unit_price):
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE invoice_lines SET description=%s, qty=%s, unit_price=%s WHERE id=%s",
+        [description, qty, unit_price, line_id]
+    )
+    cur.close()
+    release_conn(con)
+
+
+def get_all_settings():
+    con = get_conn()
+    df = pd.read_sql("SELECT key, value FROM settings", con)
+    release_conn(con)
+    return dict(zip(df['key'], df['value'])) if not df.empty else {}
+
+
+def recalculate_and_save_invoice(invoice_row):
+    st.cache_data.clear()
+    invoice_id     = invoice_row['id']
+    invoice_number = invoice_row['invoice_number']
+    billing_type   = invoice_row.get('billing_type', 'hourly')
+    include_gst    = bool(invoice_row.get('include_gst', True))
+    client         = invoice_row['client']
+    due_date_val   = invoice_row.get('due_date')
+    period_end_val = invoice_row.get('period_end')
+
+    # Load updated lines
+    if billing_type == 'fixed':
+        lines = load_invoice_lines_saved(invoice_number)
+        entries_df = pd.DataFrame()
+    else:
+        entries_df = load_invoice_entries(invoice_number)
+        lines = None
+
+    # Rebuild settings dict for HTML generation
+    s = get_all_settings()
+    clients_df = get_clients_list()
+    client_rows = clients_df[clients_df['name'] == client]
+    client_row  = client_rows.iloc[0] if not client_rows.empty else None
+    client_day_rate = float(client_row['day_rate']) if client_row is not None and 'day_rate' in client_row else 0
+    client_address  = client_row['address'] if client_row is not None and 'address' in client_row else ''
+    s['inv_client_name']    = client
+    s['inv_client_address'] = client_address or ''
+
+    due_date_obj = None
+    if due_date_val is not None:
+        try:
+            due_date_obj = pd.to_datetime(due_date_val).date()
+        except Exception:
+            pass
+
+    period_end_obj = None
+    if period_end_val is not None:
+        try:
+            period_end_obj = pd.to_datetime(period_end_val).date()
+        except Exception:
+            pass
+
+    new_html = generate_invoice_html(
+        entries_df, s, invoice_number, include_gst,
+        payment_terms=s.get('payment_terms', ''),
+        billing_type=billing_type,
+        client_day_rate=client_day_rate,
+        adhoc_lines=lines,
+        due_date=due_date_obj,
+        period_end=period_end_obj,
+    )
+
+    # Recalculate totals from the HTML generator output (re-derive from lines)
+    if billing_type == 'fixed':
+        subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in (lines or []))
+    elif billing_type == 'day_rate':
+        subtotal = len(entries_df['entry_date'].unique()) * client_day_rate if not entries_df.empty else 0
+    else:
+        subtotal = sum(float(r['hours']) * float(r['rate']) for _, r in entries_df.iterrows()) if not entries_df.empty else 0
+
+    gst   = round(subtotal * 0.1, 2) if include_gst else 0
+    total = round(subtotal + gst, 2)
+    subtotal = round(subtotal, 2)
+
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE invoices SET subtotal=%s, gst=%s, total=%s, html_content=%s WHERE id=%s",
+        [subtotal, gst, total, new_html, invoice_id]
+    )
     cur.close()
     release_conn(con)
 
@@ -1617,6 +1779,7 @@ if page == 'invoice':
                             'client': inv_client, 'subtotal': subtotal, 'gst': gst, 'total': total,
                             'entries': len(inv_df), 'inv_number': reserved_num,
                             'is_timesheet': True, 'billing_type': client_billing_type,
+                            'due_date': inv_due_date, 'period_end': inv_period_end,
                         }
 
             else:  # fixed price
@@ -1730,6 +1893,7 @@ if page == 'invoice':
                             'client': inv_client, 'subtotal': subtotal, 'gst': gst, 'total': total,
                             'entries': len(fp_lines), 'inv_number': fp_reserved_num,
                             'is_timesheet': False, 'billing_type': 'fixed',
+                            'due_date': inv_due_date, 'period_end': inv_period_end,
                         }
                     if clrcol.button("Clear all lines", key="clear_fp", use_container_width=True):
                         clear_adhoc_lines(inv_client)
@@ -1755,12 +1919,18 @@ if page == 'invoice':
                 with mark_col:
                     if inv_data.get('is_timesheet') and inv_data['ids']:
                         if st.button("✓ Mark entries as Invoiced", use_container_width=True, key="mark_invoiced"):
+                            _inv_num = inv_data['inv_number']
+                            _inc_gst = inv_data.get('gst', 0) > 0
                             set_status_bulk(inv_data['ids'], 'invoiced')
-                            save_invoice(inv_data['inv_number'], inv_data['client'],
+                            stamp_invoice_number(inv_data['ids'], _inv_num)
+                            save_invoice(_inv_num, inv_data['client'],
                                          inv_data.get('subtotal', inv_data['total']),
                                          inv_data.get('gst', 0), inv_data['total'],
                                          inv_data.get('billing_type', 'hourly'), 'timesheet',
-                                         html_content=inv_data.get('html', ''))
+                                         html_content=inv_data.get('html', ''),
+                                         include_gst=_inc_gst,
+                                         due_date=inv_data.get('due_date'),
+                                         period_end=inv_data.get('period_end'))
                             st.session_state.pop('generated_invoice', None)
                             go('statements')
                             st.rerun()
@@ -1775,14 +1945,22 @@ if page == 'invoice':
                         else:
                             mark_approved = False
                         if st.button("✓ Record Invoice Sent", use_container_width=True, key="mark_fp_done"):
-                            save_invoice(inv_data['inv_number'], inv_data['client'],
+                            _inv_num = inv_data['inv_number']
+                            _inc_gst = inv_data.get('gst', 0) > 0
+                            _fp_lines = load_adhoc_lines(inv_data['client'])
+                            save_invoice(_inv_num, inv_data['client'],
                                          inv_data.get('subtotal', inv_data['total']),
                                          inv_data.get('gst', 0), inv_data['total'],
                                          'fixed', 'fixed',
-                                         html_content=inv_data.get('html', ''))
+                                         html_content=inv_data.get('html', ''),
+                                         include_gst=_inc_gst,
+                                         due_date=inv_data.get('due_date'),
+                                         period_end=inv_data.get('period_end'))
+                            save_invoice_lines(_inv_num, _fp_lines)
                             increment_invoice_number()
                             if mark_approved and not _approved_entries.empty:
                                 set_status_bulk(_approved_entries['id'].tolist(), 'invoiced')
+                                stamp_invoice_number(_approved_entries['id'].tolist(), _inv_num)
                             st.session_state.pop('generated_invoice', None)
                             clear_adhoc_lines(inv_data['client'])
                             go('statements')
@@ -2401,6 +2579,7 @@ if page == 'statements':
 
                 _desc = str(row.get('description') or '')
                 _html = str(row.get('html_content') or '')
+                _edit_key = f"editing_inv_{row['id']}"
                 c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.6, 2.0, 1.3, 1.1, 1.4, 1.2, 1.2, 1.4])
                 c1.write(f"**{row['invoice_number']}**")
                 if _desc:
@@ -2412,15 +2591,76 @@ if page == 'statements':
                 if _html:
                     c6.download_button("⬇ Reprint", _html.encode('utf-8'), f"{row['invoice_number']}.html", "text/html",
                                        key=f"reprint_{row['id']}", use_container_width=True)
-                with c7.popover("✏ Note", use_container_width=True):
-                    st.markdown(f"**Description — {row['invoice_number']}**")
-                    new_desc = st.text_input("Description", value=_desc, key=f"inp_desc_{row['id']}")
-                    if st.button("Save", key=f"save_desc_{row['id']}", type="primary"):
-                        update_invoice_description(row['id'], new_desc.strip())
-                        st.rerun()
+                if c7.button("✏ Edit", key=f"editbtn_{row['id']}", use_container_width=True):
+                    st.session_state[_edit_key] = not st.session_state.get(_edit_key, False)
                 if c8.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
                     mark_invoice_paid(row['id'], paid=True)
                     st.rerun()
+
+                if st.session_state.get(_edit_key):
+                    _inv_type = str(row.get('invoice_type') or 'timesheet')
+                    _billing  = str(row.get('billing_type') or 'hourly')
+                    _inc_gst  = bool(row.get('include_gst', True))
+                    with st.container(border=True):
+                        st.markdown(f"**Edit invoice {row['invoice_number']}**")
+                        # ── Memo / description ──
+                        _memo = st.text_input("Memo (optional)", value=_desc, key=f"memo_{row['id']}")
+
+                        st.markdown("**Line items**")
+                        if _billing == 'fixed':
+                            _lines = load_invoice_lines_saved(row['invoice_number'])
+                            if not _lines:
+                                st.info("No line data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
+                            else:
+                                lh1, lh2, lh3, lh4, lh5 = st.columns([3.5, 1.2, 1.5, 1.5, 0.8])
+                                lh1.caption("Description"); lh2.caption("Qty"); lh3.caption("Unit price"); lh4.caption("Amount"); lh5.caption("")
+                                edited_lines = []
+                                for li, ln in enumerate(_lines):
+                                    lc1, lc2, lc3, lc4, lc5 = st.columns([3.5, 1.2, 1.5, 1.5, 0.8])
+                                    e_desc = lc1.text_input("Desc", value=ln['description'], key=f"ld_{row['id']}_{li}", label_visibility="collapsed")
+                                    e_qty  = lc2.number_input("Qty", value=float(ln['qty']), min_value=0.0, step=1.0, key=f"lq_{row['id']}_{li}", label_visibility="collapsed")
+                                    e_price= lc3.number_input("Price", value=float(ln['unit_price']), min_value=0.0, step=10.0, format="%.2f", key=f"lp_{row['id']}_{li}", label_visibility="collapsed")
+                                    lc4.write(f"${e_qty * e_price:,.2f}")
+                                    edited_lines.append({'id': ln['id'], 'desc': e_desc, 'qty': e_qty, 'price': e_price})
+                                    if lc5.button("✕", key=f"del_line_{row['id']}_{li}"):
+                                        update_invoice_line_saved(ln['id'], ln['description'], 0, 0)
+                                        st.rerun()
+                        else:
+                            _entries = load_invoice_entries(row['invoice_number'])
+                            if _entries.empty:
+                                st.info("No entry data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
+                                edited_lines = []
+                                _lines = []
+                            else:
+                                eh1, eh2, eh3, eh4, eh5, eh6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
+                                eh1.caption("Date"); eh2.caption("Project"); eh3.caption("Description"); eh4.caption("Hours"); eh5.caption("Rate"); eh6.caption("Amount")
+                                edited_lines = []
+                                _lines = None
+                                for _, ent in _entries.iterrows():
+                                    ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
+                                    ec1.write(str(ent['entry_date'])[:10])
+                                    ec2.write(str(ent.get('project') or ''))
+                                    e_desc = ec3.text_input("Desc", value=str(ent.get('description') or ''), key=f"ed_{row['id']}_{ent['id']}", label_visibility="collapsed")
+                                    e_hrs  = ec4.number_input("Hrs", value=float(ent['hours']), min_value=0.0, step=0.25, key=f"eh_{row['id']}_{ent['id']}", label_visibility="collapsed")
+                                    e_rate = ec5.number_input("Rate", value=float(ent['rate']), min_value=0.0, step=1.0, format="%.2f", key=f"er_{row['id']}_{ent['id']}", label_visibility="collapsed")
+                                    ec6.write(f"${e_hrs * e_rate:,.2f}")
+                                    edited_lines.append({'id': ent['id'], 'desc': e_desc, 'hrs': e_hrs, 'rate': e_rate})
+
+                        sc1, sc2 = st.columns(2)
+                        if sc1.button("💾 Save & regenerate", key=f"saveinv_{row['id']}", type="primary"):
+                            update_invoice_description(row['id'], _memo.strip())
+                            if _billing == 'fixed' and edited_lines:
+                                for el in edited_lines:
+                                    update_invoice_line_saved(el['id'], el['desc'], el['qty'], el['price'])
+                            elif edited_lines:
+                                for el in edited_lines:
+                                    update_entry_invoice_fields(el['id'], el['desc'], el['hrs'], el['rate'])
+                            recalculate_and_save_invoice(row)
+                            st.session_state.pop(_edit_key, None)
+                            st.rerun()
+                        if sc2.button("Cancel", key=f"cancelinv_{row['id']}"):
+                            st.session_state.pop(_edit_key, None)
+                            st.rerun()
 
             st.write("")
 
@@ -2444,6 +2684,7 @@ if page == 'statements':
                 for _, row in paid.iterrows():
                     _desc = str(row.get('description') or '')
                     _html = str(row.get('html_content') or '')
+                    _edit_key = f"editing_inv_{row['id']}"
                     c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.2, 1.2, 1.2])
                     c1.write(f"**{row['invoice_number']}**")
                     if _desc:
@@ -2456,15 +2697,70 @@ if page == 'statements':
                     if _html:
                         c6.download_button("⬇ Reprint", _html.encode('utf-8'), f"{row['invoice_number']}.html", "text/html",
                                            key=f"reprint_{row['id']}", use_container_width=True)
-                    with c7.popover("✏ Note", use_container_width=True):
-                        st.markdown(f"**Description — {row['invoice_number']}**")
-                        new_desc = st.text_input("Description", value=_desc, key=f"inp_desc_{row['id']}")
-                        if st.button("Save", key=f"save_desc_{row['id']}", type="primary"):
-                            update_invoice_description(row['id'], new_desc.strip())
-                            st.rerun()
+                    if c7.button("✏ Edit", key=f"editbtn_{row['id']}", use_container_width=True):
+                        st.session_state[_edit_key] = not st.session_state.get(_edit_key, False)
                     if c8.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
                         mark_invoice_paid(row['id'], paid=False)
                         st.rerun()
+
+                    if st.session_state.get(_edit_key):
+                        _billing = str(row.get('billing_type') or 'hourly')
+                        with st.container(border=True):
+                            st.markdown(f"**Edit invoice {row['invoice_number']}**")
+                            _memo = st.text_input("Memo (optional)", value=_desc, key=f"memo_{row['id']}")
+                            st.markdown("**Line items**")
+                            if _billing == 'fixed':
+                                _lines = load_invoice_lines_saved(row['invoice_number'])
+                                if not _lines:
+                                    st.info("No line data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
+                                    edited_lines = []
+                                else:
+                                    lh1, lh2, lh3, lh4 = st.columns([3.5, 1.2, 1.5, 1.5])
+                                    lh1.caption("Description"); lh2.caption("Qty"); lh3.caption("Unit price"); lh4.caption("Amount")
+                                    edited_lines = []
+                                    for li, ln in enumerate(_lines):
+                                        lc1, lc2, lc3, lc4 = st.columns([3.5, 1.2, 1.5, 1.5])
+                                        e_desc = lc1.text_input("Desc", value=ln['description'], key=f"ld_{row['id']}_{li}", label_visibility="collapsed")
+                                        e_qty  = lc2.number_input("Qty", value=float(ln['qty']), min_value=0.0, step=1.0, key=f"lq_{row['id']}_{li}", label_visibility="collapsed")
+                                        e_price= lc3.number_input("Price", value=float(ln['unit_price']), min_value=0.0, step=10.0, format="%.2f", key=f"lp_{row['id']}_{li}", label_visibility="collapsed")
+                                        lc4.write(f"${e_qty * e_price:,.2f}")
+                                        edited_lines.append({'id': ln['id'], 'desc': e_desc, 'qty': e_qty, 'price': e_price})
+                            else:
+                                _entries = load_invoice_entries(row['invoice_number'])
+                                if _entries.empty:
+                                    st.info("No entry data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
+                                    edited_lines = []
+                                    _lines = []
+                                else:
+                                    eh1, eh2, eh3, eh4, eh5, eh6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
+                                    eh1.caption("Date"); eh2.caption("Project"); eh3.caption("Description"); eh4.caption("Hours"); eh5.caption("Rate"); eh6.caption("Amount")
+                                    edited_lines = []
+                                    _lines = None
+                                    for _, ent in _entries.iterrows():
+                                        ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
+                                        ec1.write(str(ent['entry_date'])[:10])
+                                        ec2.write(str(ent.get('project') or ''))
+                                        e_desc = ec3.text_input("Desc", value=str(ent.get('description') or ''), key=f"ed_{row['id']}_{ent['id']}", label_visibility="collapsed")
+                                        e_hrs  = ec4.number_input("Hrs", value=float(ent['hours']), min_value=0.0, step=0.25, key=f"eh_{row['id']}_{ent['id']}", label_visibility="collapsed")
+                                        e_rate = ec5.number_input("Rate", value=float(ent['rate']), min_value=0.0, step=1.0, format="%.2f", key=f"er_{row['id']}_{ent['id']}", label_visibility="collapsed")
+                                        ec6.write(f"${e_hrs * e_rate:,.2f}")
+                                        edited_lines.append({'id': ent['id'], 'desc': e_desc, 'hrs': e_hrs, 'rate': e_rate})
+
+                            sc1, sc2 = st.columns(2)
+                            if sc1.button("💾 Save & regenerate", key=f"saveinv_{row['id']}", type="primary"):
+                                update_invoice_description(row['id'], _memo.strip())
+                                if _billing == 'fixed' and edited_lines:
+                                    for el in edited_lines:
+                                        update_invoice_line_saved(el['id'], el['desc'], el['qty'], el['price'])
+                                elif edited_lines:
+                                    for el in edited_lines:
+                                        update_entry_invoice_fields(el['id'], el['desc'], el['hrs'], el['rate'])
+                                recalculate_and_save_invoice(row)
+                                st.session_state.pop(_edit_key, None)
+                                st.rerun()
+                            if sc2.button("Cancel", key=f"cancelinv_{row['id']}"):
+                                st.session_state.pop(_edit_key, None)
+                                st.rerun()
 
         # ── Export ─────────────────────────────────────────────────────────────
         st.divider()
