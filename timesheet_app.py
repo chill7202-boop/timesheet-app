@@ -2611,50 +2611,65 @@ if page == 'statements':
                             _lines = load_invoice_lines_saved(row['invoice_number'])
                             if not _lines:
                                 st.info("No line data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
+                                _line_ids = []
+                                edited_df = pd.DataFrame()
                             else:
-                                lh1, lh2, lh3, lh4, lh5 = st.columns([3.5, 1.2, 1.5, 1.5, 0.8])
-                                lh1.caption("Description"); lh2.caption("Qty"); lh3.caption("Unit price"); lh4.caption("Amount"); lh5.caption("")
-                                edited_lines = []
-                                for li, ln in enumerate(_lines):
-                                    lc1, lc2, lc3, lc4, lc5 = st.columns([3.5, 1.2, 1.5, 1.5, 0.8])
-                                    e_desc = lc1.text_input("Desc", value=ln['description'], key=f"ld_{row['id']}_{li}", label_visibility="collapsed")
-                                    e_qty  = lc2.number_input("Qty", value=float(ln['qty']), min_value=0.0, step=1.0, key=f"lq_{row['id']}_{li}", label_visibility="collapsed")
-                                    e_price= lc3.number_input("Price", value=float(ln['unit_price']), min_value=0.0, step=10.0, format="%.2f", key=f"lp_{row['id']}_{li}", label_visibility="collapsed")
-                                    lc4.write(f"${e_qty * e_price:,.2f}")
-                                    edited_lines.append({'id': ln['id'], 'desc': e_desc, 'qty': e_qty, 'price': e_price})
-                                    if lc5.button("✕", key=f"del_line_{row['id']}_{li}"):
-                                        update_invoice_line_saved(ln['id'], ln['description'], 0, 0)
-                                        st.rerun()
+                                _line_ids = [ln['id'] for ln in _lines]
+                                _edit_df = pd.DataFrame([
+                                    {'Description': ln['description'], 'Qty': float(ln['qty']), 'Unit Price ($)': float(ln['unit_price'])}
+                                    for ln in _lines
+                                ])
+                                edited_df = st.data_editor(
+                                    _edit_df,
+                                    column_config={
+                                        'Description': st.column_config.TextColumn('Description', width='large'),
+                                        'Qty': st.column_config.NumberColumn('Qty', min_value=0, step=1, width='small'),
+                                        'Unit Price ($)': st.column_config.NumberColumn('Unit Price ($)', min_value=0, step=10, format='$%.2f', width='medium'),
+                                    },
+                                    hide_index=True, use_container_width=True, num_rows='fixed',
+                                    key=f"inv_lines_editor_{row['id']}"
+                                )
                         else:
                             _entries = load_invoice_entries(row['invoice_number'])
                             if _entries.empty:
                                 st.info("No entry data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
-                                edited_lines = []
-                                _lines = []
+                                _entry_ids = []
+                                edited_df = pd.DataFrame()
                             else:
-                                eh1, eh2, eh3, eh4, eh5, eh6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
-                                eh1.caption("Date"); eh2.caption("Project"); eh3.caption("Description"); eh4.caption("Hours"); eh5.caption("Rate"); eh6.caption("Amount")
-                                edited_lines = []
-                                _lines = None
-                                for _, ent in _entries.iterrows():
-                                    ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
-                                    ec1.write(str(ent['entry_date'])[:10])
-                                    ec2.write(str(ent.get('project') or ''))
-                                    e_desc = ec3.text_input("Desc", value=str(ent.get('description') or ''), key=f"ed_{row['id']}_{ent['id']}", label_visibility="collapsed")
-                                    e_hrs  = ec4.number_input("Hrs", value=float(ent['hours']), min_value=0.0, step=0.25, key=f"eh_{row['id']}_{ent['id']}", label_visibility="collapsed")
-                                    e_rate = ec5.number_input("Rate", value=float(ent['rate']), min_value=0.0, step=1.0, format="%.2f", key=f"er_{row['id']}_{ent['id']}", label_visibility="collapsed")
-                                    ec6.write(f"${e_hrs * e_rate:,.2f}")
-                                    edited_lines.append({'id': ent['id'], 'desc': e_desc, 'hrs': e_hrs, 'rate': e_rate})
+                                _entry_ids = _entries['id'].tolist()
+                                _edit_df = pd.DataFrame({
+                                    'Date': _entries['entry_date'].astype(str).str[:10],
+                                    'Project': _entries['project'].fillna('').astype(str),
+                                    'Description': _entries['description'].fillna('').astype(str),
+                                    'Hours': _entries['hours'].astype(float),
+                                    'Rate ($)': _entries['rate'].astype(float),
+                                })
+                                edited_df = st.data_editor(
+                                    _edit_df,
+                                    column_config={
+                                        'Date': st.column_config.TextColumn('Date', disabled=True, width='small'),
+                                        'Project': st.column_config.TextColumn('Project', disabled=True, width='medium'),
+                                        'Description': st.column_config.TextColumn('Description', width='large'),
+                                        'Hours': st.column_config.NumberColumn('Hours', min_value=0, step=0.25, width='small'),
+                                        'Rate ($)': st.column_config.NumberColumn('Rate ($)', min_value=0, step=1, format='$%.2f', width='small'),
+                                    },
+                                    hide_index=True, use_container_width=True, num_rows='fixed',
+                                    key=f"inv_entries_editor_{row['id']}"
+                                )
 
                         sc1, sc2 = st.columns(2)
                         if sc1.button("💾 Save & regenerate", key=f"saveinv_{row['id']}", type="primary"):
                             update_invoice_description(row['id'], _memo.strip())
-                            if _billing == 'fixed' and edited_lines:
-                                for el in edited_lines:
-                                    update_invoice_line_saved(el['id'], el['desc'], el['qty'], el['price'])
-                            elif edited_lines:
-                                for el in edited_lines:
-                                    update_entry_invoice_fields(el['id'], el['desc'], el['hrs'], el['rate'])
+                            if _billing == 'fixed' and not edited_df.empty:
+                                for i, erow in edited_df.iterrows():
+                                    if i < len(_line_ids):
+                                        update_invoice_line_saved(_line_ids[i], erow['Description'], erow['Qty'], erow['Unit Price ($)'])
+                                st.session_state.pop(f"inv_lines_editor_{row['id']}", None)
+                            elif not edited_df.empty:
+                                for i, erow in edited_df.iterrows():
+                                    if i < len(_entry_ids):
+                                        update_entry_invoice_fields(_entry_ids[i], erow['Description'], erow['Hours'], erow['Rate ($)'])
+                                st.session_state.pop(f"inv_entries_editor_{row['id']}", None)
                             recalculate_and_save_invoice(row)
                             st.session_state.pop(_edit_key, None)
                             st.rerun()
@@ -2713,48 +2728,65 @@ if page == 'statements':
                                 _lines = load_invoice_lines_saved(row['invoice_number'])
                                 if not _lines:
                                     st.info("No line data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
-                                    edited_lines = []
+                                    _line_ids = []
+                                    edited_df = pd.DataFrame()
                                 else:
-                                    lh1, lh2, lh3, lh4 = st.columns([3.5, 1.2, 1.5, 1.5])
-                                    lh1.caption("Description"); lh2.caption("Qty"); lh3.caption("Unit price"); lh4.caption("Amount")
-                                    edited_lines = []
-                                    for li, ln in enumerate(_lines):
-                                        lc1, lc2, lc3, lc4 = st.columns([3.5, 1.2, 1.5, 1.5])
-                                        e_desc = lc1.text_input("Desc", value=ln['description'], key=f"ld_{row['id']}_{li}", label_visibility="collapsed")
-                                        e_qty  = lc2.number_input("Qty", value=float(ln['qty']), min_value=0.0, step=1.0, key=f"lq_{row['id']}_{li}", label_visibility="collapsed")
-                                        e_price= lc3.number_input("Price", value=float(ln['unit_price']), min_value=0.0, step=10.0, format="%.2f", key=f"lp_{row['id']}_{li}", label_visibility="collapsed")
-                                        lc4.write(f"${e_qty * e_price:,.2f}")
-                                        edited_lines.append({'id': ln['id'], 'desc': e_desc, 'qty': e_qty, 'price': e_price})
+                                    _line_ids = [ln['id'] for ln in _lines]
+                                    _edit_df = pd.DataFrame([
+                                        {'Description': ln['description'], 'Qty': float(ln['qty']), 'Unit Price ($)': float(ln['unit_price'])}
+                                        for ln in _lines
+                                    ])
+                                    edited_df = st.data_editor(
+                                        _edit_df,
+                                        column_config={
+                                            'Description': st.column_config.TextColumn('Description', width='large'),
+                                            'Qty': st.column_config.NumberColumn('Qty', min_value=0, step=1, width='small'),
+                                            'Unit Price ($)': st.column_config.NumberColumn('Unit Price ($)', min_value=0, step=10, format='$%.2f', width='medium'),
+                                        },
+                                        hide_index=True, use_container_width=True, num_rows='fixed',
+                                        key=f"inv_lines_editor_{row['id']}"
+                                    )
                             else:
                                 _entries = load_invoice_entries(row['invoice_number'])
                                 if _entries.empty:
                                     st.info("No entry data stored for this invoice (created before this feature). Edit the memo above and use Reprint to view.")
-                                    edited_lines = []
-                                    _lines = []
+                                    _entry_ids = []
+                                    edited_df = pd.DataFrame()
                                 else:
-                                    eh1, eh2, eh3, eh4, eh5, eh6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
-                                    eh1.caption("Date"); eh2.caption("Project"); eh3.caption("Description"); eh4.caption("Hours"); eh5.caption("Rate"); eh6.caption("Amount")
-                                    edited_lines = []
-                                    _lines = None
-                                    for _, ent in _entries.iterrows():
-                                        ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([1.4, 1.5, 2.5, 1.2, 1.2, 1.5])
-                                        ec1.write(str(ent['entry_date'])[:10])
-                                        ec2.write(str(ent.get('project') or ''))
-                                        e_desc = ec3.text_input("Desc", value=str(ent.get('description') or ''), key=f"ed_{row['id']}_{ent['id']}", label_visibility="collapsed")
-                                        e_hrs  = ec4.number_input("Hrs", value=float(ent['hours']), min_value=0.0, step=0.25, key=f"eh_{row['id']}_{ent['id']}", label_visibility="collapsed")
-                                        e_rate = ec5.number_input("Rate", value=float(ent['rate']), min_value=0.0, step=1.0, format="%.2f", key=f"er_{row['id']}_{ent['id']}", label_visibility="collapsed")
-                                        ec6.write(f"${e_hrs * e_rate:,.2f}")
-                                        edited_lines.append({'id': ent['id'], 'desc': e_desc, 'hrs': e_hrs, 'rate': e_rate})
+                                    _entry_ids = _entries['id'].tolist()
+                                    _edit_df = pd.DataFrame({
+                                        'Date': _entries['entry_date'].astype(str).str[:10],
+                                        'Project': _entries['project'].fillna('').astype(str),
+                                        'Description': _entries['description'].fillna('').astype(str),
+                                        'Hours': _entries['hours'].astype(float),
+                                        'Rate ($)': _entries['rate'].astype(float),
+                                    })
+                                    edited_df = st.data_editor(
+                                        _edit_df,
+                                        column_config={
+                                            'Date': st.column_config.TextColumn('Date', disabled=True, width='small'),
+                                            'Project': st.column_config.TextColumn('Project', disabled=True, width='medium'),
+                                            'Description': st.column_config.TextColumn('Description', width='large'),
+                                            'Hours': st.column_config.NumberColumn('Hours', min_value=0, step=0.25, width='small'),
+                                            'Rate ($)': st.column_config.NumberColumn('Rate ($)', min_value=0, step=1, format='$%.2f', width='small'),
+                                        },
+                                        hide_index=True, use_container_width=True, num_rows='fixed',
+                                        key=f"inv_entries_editor_{row['id']}"
+                                    )
 
                             sc1, sc2 = st.columns(2)
                             if sc1.button("💾 Save & regenerate", key=f"saveinv_{row['id']}", type="primary"):
                                 update_invoice_description(row['id'], _memo.strip())
-                                if _billing == 'fixed' and edited_lines:
-                                    for el in edited_lines:
-                                        update_invoice_line_saved(el['id'], el['desc'], el['qty'], el['price'])
-                                elif edited_lines:
-                                    for el in edited_lines:
-                                        update_entry_invoice_fields(el['id'], el['desc'], el['hrs'], el['rate'])
+                                if _billing == 'fixed' and not edited_df.empty:
+                                    for i, erow in edited_df.iterrows():
+                                        if i < len(_line_ids):
+                                            update_invoice_line_saved(_line_ids[i], erow['Description'], erow['Qty'], erow['Unit Price ($)'])
+                                    st.session_state.pop(f"inv_lines_editor_{row['id']}", None)
+                                elif not edited_df.empty:
+                                    for i, erow in edited_df.iterrows():
+                                        if i < len(_entry_ids):
+                                            update_entry_invoice_fields(_entry_ids[i], erow['Description'], erow['Hours'], erow['Rate ($)'])
+                                    st.session_state.pop(f"inv_entries_editor_{row['id']}", None)
                                 recalculate_and_save_invoice(row)
                                 st.session_state.pop(_edit_key, None)
                                 st.rerun()
