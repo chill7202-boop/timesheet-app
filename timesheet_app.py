@@ -2379,7 +2379,7 @@ if page == 'statements':
             )
 
             # Column headers
-            h1, h2, h3, h4, h5, h6, h7 = st.columns([1.6, 2.0, 1.3, 1.1, 1.5, 1.4, 1.6])
+            h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.6, 2.0, 1.3, 1.1, 1.4, 1.2, 1.2, 1.4])
             h1.caption("Invoice #")
             h2.caption("Client")
             h3.caption("Date")
@@ -2387,6 +2387,7 @@ if page == 'statements':
             h5.caption("Amount")
             h6.caption("")
             h7.caption("")
+            h8.caption("")
 
             for _, row in outstanding.iterrows():
                 inv_date = pd.to_datetime(row['invoice_date'])
@@ -2398,31 +2399,28 @@ if page == 'statements':
                 else:
                     age_str = f"{days}d"
 
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.6, 2.0, 1.3, 1.1, 1.5, 1.4, 1.6])
+                _desc = str(row.get('description') or '')
+                _html = str(row.get('html_content') or '')
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.6, 2.0, 1.3, 1.1, 1.4, 1.2, 1.2, 1.4])
                 c1.write(f"**{row['invoice_number']}**")
+                if _desc:
+                    c1.caption(f"📝 {_desc}")
                 c2.write(row['client'])
                 c3.write(inv_date.strftime('%d/%m/%Y'))
                 c4.write(age_str)
                 c5.write(f"**${float(row['total']):,.2f}**")
-                _html = str(row.get('html_content') or '')
                 if _html:
                     c6.download_button("⬇ Reprint", _html.encode('utf-8'), f"{row['invoice_number']}.html", "text/html",
                                        key=f"reprint_{row['id']}", use_container_width=True)
-                if c7.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
+                with c7.popover("✏ Note", use_container_width=True):
+                    st.markdown(f"**Description — {row['invoice_number']}**")
+                    new_desc = st.text_input("Description", value=_desc, key=f"inp_desc_{row['id']}")
+                    if st.button("Save", key=f"save_desc_{row['id']}", type="primary"):
+                        update_invoice_description(row['id'], new_desc.strip())
+                        st.rerun()
+                if c8.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
                     mark_invoice_paid(row['id'], paid=True)
                     st.rerun()
-                _desc = str(row.get('description') or '')
-                edit_key = f"edit_desc_{row['id']}"
-                if _desc:
-                    st.caption(f"📝 {_desc}")
-                if st.button("✏ Edit description", key=f"btn_{edit_key}", use_container_width=False):
-                    st.session_state[edit_key] = True
-                if st.session_state.get(edit_key):
-                    new_desc = st.text_input("Description", value=_desc, key=f"inp_{edit_key}")
-                    if st.button("Save", key=f"save_{edit_key}"):
-                        update_invoice_description(row['id'], new_desc.strip())
-                        st.session_state.pop(edit_key, None)
-                        st.rerun()
 
             st.write("")
 
@@ -2433,7 +2431,7 @@ if page == 'statements':
             with st.expander(
                 f"✅ Paid — {len(paid)} invoice{'s' if len(paid)!=1 else ''} · ${paid_total:,.2f}"
             ):
-                h1, h2, h3, h4, h5, h6, h7 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.4, 1.4])
+                h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.2, 1.2, 1.2])
                 h1.caption("Invoice #")
                 h2.caption("Client")
                 h3.caption("Invoiced")
@@ -2441,34 +2439,32 @@ if page == 'statements':
                 h5.caption("Amount")
                 h6.caption("")
                 h7.caption("")
+                h8.caption("")
 
                 for _, row in paid.iterrows():
-                    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.4, 1.4])
+                    _desc = str(row.get('description') or '')
+                    _html = str(row.get('html_content') or '')
+                    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.6, 2.0, 1.3, 1.3, 1.4, 1.2, 1.2, 1.2])
                     c1.write(f"**{row['invoice_number']}**")
+                    if _desc:
+                        c1.caption(f"📝 {_desc}")
                     c2.write(row['client'])
                     c3.write(pd.to_datetime(row['invoice_date']).strftime('%d/%m/%Y'))
                     paid_on = pd.to_datetime(row['paid_date']).strftime('%d/%m/%Y') if pd.notna(row['paid_date']) else '—'
                     c4.write(paid_on)
                     c5.write(f"${float(row['total']):,.2f}")
-                    _html = str(row.get('html_content') or '')
                     if _html:
                         c6.download_button("⬇ Reprint", _html.encode('utf-8'), f"{row['invoice_number']}.html", "text/html",
                                            key=f"reprint_{row['id']}", use_container_width=True)
-                    if c7.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
+                    with c7.popover("✏ Note", use_container_width=True):
+                        st.markdown(f"**Description — {row['invoice_number']}**")
+                        new_desc = st.text_input("Description", value=_desc, key=f"inp_desc_{row['id']}")
+                        if st.button("Save", key=f"save_desc_{row['id']}", type="primary"):
+                            update_invoice_description(row['id'], new_desc.strip())
+                            st.rerun()
+                    if c8.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
                         mark_invoice_paid(row['id'], paid=False)
                         st.rerun()
-                    _desc = str(row.get('description') or '')
-                    edit_key = f"edit_desc_{row['id']}"
-                    if _desc:
-                        st.caption(f"📝 {_desc}")
-                    if st.button("✏ Edit description", key=f"btn_{edit_key}", use_container_width=False):
-                        st.session_state[edit_key] = True
-                    if st.session_state.get(edit_key):
-                        new_desc = st.text_input("Description", value=_desc, key=f"inp_{edit_key}")
-                        if st.button("Save", key=f"save_{edit_key}"):
-                            update_invoice_description(row['id'], new_desc.strip())
-                            st.session_state.pop(edit_key, None)
-                            st.rerun()
 
         # ── Export ─────────────────────────────────────────────────────────────
         st.divider()
