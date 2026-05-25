@@ -118,6 +118,7 @@ def init_db():
     for stmt in [
         "ALTER TABLE employees ADD COLUMN IF NOT EXISTS cost_rate NUMERIC(8,2) DEFAULT 0",
         "ALTER TABLE entries ADD COLUMN IF NOT EXISTS cost_rate NUMERIC(8,2) DEFAULT 0",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS description VARCHAR",
     ]:
         try:
             cur.execute(stmt)
@@ -351,6 +352,15 @@ def mark_invoice_paid(invoice_id, paid=True):
         cur.execute("UPDATE invoices SET paid=TRUE, paid_date=%s WHERE id=%s", [date.today(), invoice_id])
     else:
         cur.execute("UPDATE invoices SET paid=FALSE, paid_date=NULL WHERE id=%s", [invoice_id])
+    cur.close()
+    release_conn(con)
+
+
+def update_invoice_description(invoice_id, description):
+    st.cache_data.clear()
+    con = get_conn()
+    cur = con.cursor()
+    cur.execute("UPDATE invoices SET description=%s WHERE id=%s", [description, invoice_id])
     cur.close()
     release_conn(con)
 
@@ -2401,6 +2411,18 @@ if page == 'statements':
                 if c7.button("✓ Mark Paid", key=f"paid_{row['id']}", type="primary", use_container_width=True):
                     mark_invoice_paid(row['id'], paid=True)
                     st.rerun()
+                _desc = str(row.get('description') or '')
+                edit_key = f"edit_desc_{row['id']}"
+                if _desc:
+                    st.caption(f"📝 {_desc}")
+                if st.button("✏ Edit description", key=f"btn_{edit_key}", use_container_width=False):
+                    st.session_state[edit_key] = True
+                if st.session_state.get(edit_key):
+                    new_desc = st.text_input("Description", value=_desc, key=f"inp_{edit_key}")
+                    if st.button("Save", key=f"save_{edit_key}"):
+                        update_invoice_description(row['id'], new_desc.strip())
+                        st.session_state.pop(edit_key, None)
+                        st.rerun()
 
             st.write("")
 
@@ -2435,6 +2457,18 @@ if page == 'statements':
                     if c7.button("Undo", key=f"unpaid_{row['id']}", use_container_width=True):
                         mark_invoice_paid(row['id'], paid=False)
                         st.rerun()
+                    _desc = str(row.get('description') or '')
+                    edit_key = f"edit_desc_{row['id']}"
+                    if _desc:
+                        st.caption(f"📝 {_desc}")
+                    if st.button("✏ Edit description", key=f"btn_{edit_key}", use_container_width=False):
+                        st.session_state[edit_key] = True
+                    if st.session_state.get(edit_key):
+                        new_desc = st.text_input("Description", value=_desc, key=f"inp_{edit_key}")
+                        if st.button("Save", key=f"save_{edit_key}"):
+                            update_invoice_description(row['id'], new_desc.strip())
+                            st.session_state.pop(edit_key, None)
+                            st.rerun()
 
         # ── Export ─────────────────────────────────────────────────────────────
         st.divider()
