@@ -1818,8 +1818,8 @@ if page == 'invoice':
                 else:
                     fp_subtotal = 0
 
-                _sv_col, _cl_col = st.columns(2)
-                if _sv_col.button("💾 Save lines", key="save_draft_lines", type="primary", use_container_width=True, disabled=edited_draft.empty):
+                _sv_col, _cl_col, _ = st.columns([1, 1, 4])
+                if _sv_col.button("💾 Save lines", key="save_draft_lines", type="primary", disabled=edited_draft.empty):
                     original_ids = {l['id'] for l in fp_lines}
                     edited_ids = set(edited_draft['_id'].dropna().tolist())
                     for deleted_id in original_ids - edited_ids:
@@ -1838,7 +1838,7 @@ if page == 'invoice':
                     st.session_state.pop('generated_invoice', None)
                     st.session_state.pop('draft_lines_editor', None)
                     st.rerun()
-                if _cl_col.button("Clear all lines", key="clear_fp", use_container_width=True):
+                if _cl_col.button("Clear all lines", key="clear_fp"):
                     clear_adhoc_lines(inv_client)
                     st.session_state.pop('generated_invoice', None)
                     st.session_state.pop('draft_lines_editor', None)
