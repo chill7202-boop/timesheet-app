@@ -1519,10 +1519,10 @@ if page == 'invoice':
                 else:
                     st.caption("No address on file — add it on the Clients page.")
                 include_gst    = st.checkbox("Include GST (10%)", value=True)
-                _default_due   = date.today().replace(day=min(date.today().day + 14, 28))
+                from datetime import timedelta
+                _default_due   = date.today() + timedelta(days=14)
                 inv_due_date   = st.date_input("Due date", value=_default_due, key='inv_due_date', format="DD/MM/YYYY")
             with col1:
-                from datetime import timedelta
                 _days_to_fri   = (4 - date.today().weekday()) % 7 or 7
                 _default_period = date.today() + timedelta(days=_days_to_fri)
                 inv_period_end = st.date_input("Period ending", value=_default_period, key='inv_period_end', format="DD/MM/YYYY")
