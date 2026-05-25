@@ -1787,80 +1787,53 @@ if page == 'invoice':
 
                 fp_lines = load_adhoc_lines(inv_client)
 
-                # ── Saved lines list ──
-                if fp_lines:
-                    lines_df = pd.DataFrame([
-                        {
-                            'Description':  l['description'],
-                            'Qty':          float(l['qty']),
-                            'Unit Price ($)': float(l['unit_price']),
-                            'Amount ($)':   float(l['qty']) * float(l['unit_price']),
-                        }
-                        for l in fp_lines
-                    ])
-                    st.dataframe(lines_df, use_container_width=True, hide_index=True,
-                                 column_config={
-                                     'Qty':            st.column_config.NumberColumn(format='%.2f'),
-                                     'Unit Price ($)': st.column_config.NumberColumn(format='$%.2f'),
-                                     'Amount ($)':     st.column_config.NumberColumn(format='$%.2f'),
-                                 })
+                # ── Line items editor ──
+                _draft_df = pd.DataFrame([
+                    {'_id': l['id'], 'Description': l['description'], 'Qty': float(l['qty']), 'Unit Price ($)': float(l['unit_price'])}
+                    for l in fp_lines
+                ]) if fp_lines else pd.DataFrame(columns=['_id', 'Description', 'Qty', 'Unit Price ($)'])
 
-                    fp_subtotal = sum(float(l['qty']) * float(l['unit_price']) for l in fp_lines)
-                    fp_gst      = fp_subtotal * 0.1 if include_gst else 0
+                edited_draft = st.data_editor(
+                    _draft_df,
+                    column_config={
+                        '_id': None,
+                        'Description': st.column_config.TextColumn('Description', width='large'),
+                        'Qty': st.column_config.NumberColumn('Qty', min_value=0, step=1, width='small'),
+                        'Unit Price ($)': st.column_config.NumberColumn('Unit Price ($)', min_value=0, step=100, format='$%.2f', width='medium'),
+                    },
+                    hide_index=True, use_container_width=True, num_rows='dynamic',
+                    key='draft_lines_editor'
+                )
+
+                # Live subtotal from editor state
+                if not edited_draft.empty:
+                    fp_subtotal = sum(float(r['Qty'] or 0) * float(r['Unit Price ($)'] or 0) for _, r in edited_draft.iterrows())
+                    fp_gst = fp_subtotal * 0.1 if include_gst else 0
                     st.caption(f"Subtotal: ${fp_subtotal:,.2f}  ·  GST: ${fp_gst:,.2f}  ·  **Total: ${fp_subtotal + fp_gst:,.2f}**")
+                else:
+                    fp_subtotal = 0
 
-                    with st.expander("✏️ Edit a line"):
-                        ed_idx = st.selectbox(
-                            "Select line to edit",
-                            range(len(fp_lines)),
-                            format_func=lambda i: f"{i+1}. {fp_lines[i]['description']}",
-                            key='edit_line_sel',
-                        )
-                        ed_line = fp_lines[ed_idx]
-                        ed_desc  = st.text_input("Description", value=ed_line['description'], key=f'ed_desc_{ed_line["id"]}')
-                        ec1, ec2 = st.columns(2)
-                        ed_qty   = ec1.number_input("Quantity", min_value=0.0, step=1.0, value=float(ed_line['qty']), key=f'ed_qty_{ed_line["id"]}')
-                        ed_price = ec2.number_input("Unit price ($)", min_value=0.0, step=100.0, value=float(ed_line['unit_price']), key=f'ed_price_{ed_line["id"]}')
-                        if st.button("Save changes", key="save_edit_line", type="primary"):
-                            if not ed_desc.strip():
-                                st.error("Description is required.")
-                            else:
-                                update_adhoc_line(ed_line['id'], ed_desc.strip(), ed_qty, ed_price)
-                                st.session_state.pop('generated_invoice', None)
-                                st.rerun()
+                if st.button("💾 Save lines", key="save_draft_lines", type="primary", disabled=edited_draft.empty):
+                    original_ids = {l['id'] for l in fp_lines}
+                    edited_ids = set(edited_draft['_id'].dropna().tolist())
+                    for deleted_id in original_ids - edited_ids:
+                        delete_adhoc_line(deleted_id)
+                    for _, r in edited_draft.iterrows():
+                        row_id = r.get('_id') if pd.notna(r.get('_id', None)) else None
+                        desc = str(r.get('Description') or '').strip()
+                        qty = float(r.get('Qty') or 0)
+                        price = float(r.get('Unit Price ($)') or 0)
+                        if not desc:
+                            continue
+                        if row_id and row_id in original_ids:
+                            update_adhoc_line(row_id, desc, qty, price)
+                        else:
+                            add_adhoc_line(inv_client, desc, qty, price)
+                    st.session_state.pop('generated_invoice', None)
+                    st.session_state.pop('draft_lines_editor', None)
+                    st.rerun()
 
-                    with st.expander("🗑️ Remove a line"):
-                        rm_idx = st.selectbox(
-                            "Select line to remove",
-                            range(len(fp_lines)),
-                            format_func=lambda i: f"{i+1}. {fp_lines[i]['description']}",
-                        )
-                        if st.button("Remove line", key="rm_line"):
-                            delete_adhoc_line(fp_lines[rm_idx]['id'])
-                            st.session_state.pop('generated_invoice', None)
-                            st.rerun()
-
-                    st.divider()
-
-                # ── Add line form ──
-                with st.form("add_line_form", clear_on_submit=True):
-                    st.markdown("**Add a line item**")
-                    new_desc = st.text_input("Description", placeholder="e.g. Website design, Project management…")
-                    ac1, ac2 = st.columns(2)
-                    new_qty   = ac1.number_input("Quantity", min_value=0.0, step=1.0, value=1.0)
-                    new_price = ac2.number_input("Unit price ($)", min_value=0.0, step=100.0, value=0.0)
-                    add_btn   = st.form_submit_button("+ Add Line", use_container_width=True)
-
-                if add_btn:
-                    if not new_desc.strip():
-                        st.error("Description is required.")
-                    else:
-                        try:
-                            add_adhoc_line(inv_client, new_desc.strip(), new_qty, new_price)
-                            st.session_state.pop('generated_invoice', None)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to save line: {e}")
+                st.divider()
 
                 if fp_lines:
                     already_used_fp = invoice_number_exists(inv_number)
@@ -1897,6 +1870,7 @@ if page == 'invoice':
                     if clrcol.button("Clear all lines", key="clear_fp", use_container_width=True):
                         clear_adhoc_lines(inv_client)
                         st.session_state.pop('generated_invoice', None)
+                        st.session_state.pop('draft_lines_editor', None)
                         st.rerun()
 
             # ── Download / mark invoiced ──
