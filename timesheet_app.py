@@ -538,6 +538,7 @@ def invoice_number_exists(inv_number):
 
 # ── Ad hoc draft line helpers ──────────────────────────────────────────────────
 
+@st.cache_data(ttl=30)
 def load_adhoc_lines(client):
     con = get_conn()
     cur = con.cursor()
@@ -551,6 +552,7 @@ def load_adhoc_lines(client):
     return [{'id': r[0], 'description': r[1], 'qty': float(r[2]), 'unit_price': float(r[3])} for r in rows]
 
 def add_adhoc_line(client, description, qty, unit_price):
+    load_adhoc_lines.clear()
     con = get_conn()
     cur = con.cursor()
     cur.execute(
@@ -565,6 +567,7 @@ def add_adhoc_line(client, description, qty, unit_price):
     release_conn(con)
 
 def update_adhoc_line(line_id, description, qty, unit_price):
+    load_adhoc_lines.clear()
     con = get_conn()
     cur = con.cursor()
     cur.execute(
@@ -575,6 +578,7 @@ def update_adhoc_line(line_id, description, qty, unit_price):
     release_conn(con)
 
 def delete_adhoc_line(line_id):
+    load_adhoc_lines.clear()
     con = get_conn()
     cur = con.cursor()
     cur.execute("DELETE FROM adhoc_draft_lines WHERE id=%s", [line_id])
@@ -582,6 +586,7 @@ def delete_adhoc_line(line_id):
     release_conn(con)
 
 def clear_adhoc_lines(client):
+    load_adhoc_lines.clear()
     con = get_conn()
     cur = con.cursor()
     cur.execute("DELETE FROM adhoc_draft_lines WHERE client=%s", [client])
