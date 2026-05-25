@@ -2776,14 +2776,15 @@ if page == 'profitability':
 
     con = get_conn()
     entries_df = pd.read_sql("""
-        SELECT client, project, employee,
-               SUM(hours) AS hours,
-               SUM(hours * rate) AS revenue,
-               SUM(hours * cost_rate) AS cost
-        FROM entries
-        WHERE status != 'open' OR status IS NULL
-        GROUP BY client, project, employee
-        ORDER BY client, project
+        SELECT e.client, e.project, e.employee,
+               SUM(e.hours) AS hours,
+               SUM(e.hours * e.rate) AS revenue,
+               SUM(e.hours * COALESCE(NULLIF(e.cost_rate, 0), emp.cost_rate, 0)) AS cost
+        FROM entries e
+        LEFT JOIN employees emp ON emp.name = e.employee
+        WHERE e.status != 'open' OR e.status IS NULL
+        GROUP BY e.client, e.project, e.employee
+        ORDER BY e.client, e.project
     """, con)
 
     invoices_df = pd.read_sql("""
@@ -2853,6 +2854,31 @@ if page == 'profitability':
             margin_color = "green" if row['Margin'] >= 0 else "red"
             c6.markdown(f"<span style='color:{margin_color}'>**${row['Margin']:,.2f}**</span>", unsafe_allow_html=True)
             c7.write(f"{row['Margin %']}%")
+
+        st.divider()
+
+        # ── By Employee ────────────────────────────────────────────────────────
+        st.markdown("#### By Employee")
+        employee_summary = entries_df.groupby('employee').agg(
+            Hours=('hours', 'sum'),
+            Revenue=('revenue', 'sum'),
+            Cost=('cost', 'sum'),
+            Margin=('margin', 'sum'),
+        ).reset_index()
+        employee_summary['Margin %'] = (employee_summary['Margin'] / employee_summary['Revenue'].replace(0, 1) * 100).round(1)
+
+        h1, h2, h3, h4, h5, h6 = st.columns([2.5, 1.2, 1.5, 1.5, 1.5, 1.2])
+        h1.caption("Employee"); h2.caption("Hours"); h3.caption("Revenue"); h4.caption("Cost"); h5.caption("Margin"); h6.caption("Margin %")
+
+        for _, row in employee_summary.iterrows():
+            c1, c2, c3, c4, c5, c6 = st.columns([2.5, 1.2, 1.5, 1.5, 1.5, 1.2])
+            c1.write(f"**{row['employee']}**")
+            c2.write(f"{row['Hours']:.1f}h")
+            c3.write(f"${row['Revenue']:,.2f}")
+            c4.write(f"${row['Cost']:,.2f}")
+            margin_color = "green" if row['Margin'] >= 0 else "red"
+            c5.markdown(f"<span style='color:{margin_color}'>**${row['Margin']:,.2f}**</span>", unsafe_allow_html=True)
+            c6.write(f"{row['Margin %']}%")
 
         st.divider()
         st.download_button(
