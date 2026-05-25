@@ -213,17 +213,19 @@ def delete_client(client_id):
 
 
 @st.cache_data(ttl=300)
-def get_setting(key, default=''):
+def _load_all_settings():
     con = get_conn()
-    cur = con.cursor()
-    cur.execute("SELECT value FROM settings WHERE key = %s", [key])
-    row = cur.fetchone()
-    cur.close()
+    df = pd.read_sql("SELECT key, value FROM settings", con)
     release_conn(con)
-    return row[0] if row else default
+    return dict(zip(df['key'], df['value'])) if not df.empty else {}
+
+
+def get_setting(key, default=''):
+    return _load_all_settings().get(key, default)
 
 
 def save_setting(key, value):
+    _load_all_settings.clear()
     st.cache_data.clear()
     con = get_conn()
     cur = con.cursor()
@@ -447,10 +449,7 @@ def update_invoice_line_saved(line_id, description, qty, unit_price):
 
 
 def get_all_settings():
-    con = get_conn()
-    df = pd.read_sql("SELECT key, value FROM settings", con)
-    release_conn(con)
-    return dict(zip(df['key'], df['value'])) if not df.empty else {}
+    return _load_all_settings()
 
 
 def recalculate_and_save_invoice(invoice_row):
